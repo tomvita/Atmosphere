@@ -687,6 +687,13 @@ namespace ams::dmnt::cheat::impl {
             /* Close the active process, if needed. */
             {
                 if (this->HasActiveCheatProcess()) {
+                    /* Read cheats off the SD everytime hack. */
+                    this->SaveCheatToggles(this->cheat_process_metadata.program_id);
+                    if (!this->LoadCheats(this->cheat_process_metadata.program_id, this->cheat_process_metadata.main_nso_build_id) ||
+                        !this->LoadCheatToggles(this->cheat_process_metadata.program_id)) {
+                        /* If new process launch, require success. */
+                        R_UNLESS(!on_process_launch, ResultCheatNotAttached()); 
+                    }
                     /* When forcing attach, we're done. */
                     R_SUCCEED_IF(!on_process_launch);
                 }
