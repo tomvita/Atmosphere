@@ -24,6 +24,7 @@ namespace ams::dmnt::cheat::impl {
     Handle GetCheatProcessEventHandle();
     Result GetCheatProcessMetadata(CheatProcessMetadata *out);
     Result ForceOpenCheatProcess();
+    Result ForceCloseCheatProcess();
     Result PauseCheatProcess();
     Result ResumeCheatProcess();
 
