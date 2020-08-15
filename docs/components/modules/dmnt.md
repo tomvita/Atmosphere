@@ -16,6 +16,7 @@ interface ams::dmnt::cheat::CheatService is dmnt:cht {
   [65003] ForceOpenCheatProcess();
   [65004] PauseCheatProcess();
   [65005] ResumeCheatProcess();
+  [65009] ForceCloseCheatProcess();
 
   [65100] GetCheatProcessMappingCount() -> sf::Out<u64> out_count;
   [65101] GetCheatProcessMappings(u64 offset) -> sf::OutArray<MemoryInfo> &mappings, sf::Out<u64> out_count;

@@ -66,6 +66,7 @@ Result dmntchtHasCheatProcess(bool *out);
 Result dmntchtGetCheatProcessEvent(Event *event);
 Result dmntchtGetCheatProcessMetadata(DmntCheatProcessMetadata *out_metadata);
 Result dmntchtForceOpenCheatProcess(void);
+Result dmntchtForceCloseCheatProcess(void);
 
 Result dmntchtGetCheatProcessMappingCount(u64 *out_count);
 Result dmntchtGetCheatProcessMappings(MemoryInfo *buffer, u64 max_count, u64 offset, u64 *out_count);
