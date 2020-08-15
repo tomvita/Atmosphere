@@ -66,6 +66,10 @@ Result dmntchtForceOpenCheatProcess(void) {
     return _dmntchtCmdVoid(&g_dmntchtSrv, 65003);
 }
 
+Result dmntchtForceCloseCheatProcess(void) {
+    return _dmntchtCmdVoid(&g_dmntchtSrv, 65009);
+}
+
 Result dmntchtPauseCheatProcess(void) {
     return _dmntchtCmdVoid(&g_dmntchtSrv, 65004);
 }
