@@ -242,6 +242,12 @@ namespace ams::dmnt::cheat::impl {
                     return this->AttachToApplicationProcess(false);
                 }
 
+                Result ForceCloseCheatProcess() {
+                    this->CloseActiveCheatProcess();
+                    return 0;
+                    // return this->AttachToApplicationProcess(false); this->GetValue() == 
+                }
+
                 Result ReadCheatProcessMemoryUnsafe(u64 proc_addr, void *out_data, size_t size) {
                     return svcReadDebugProcessMemory(out_data, this->GetCheatProcessHandle(), proc_addr, size);
                 }
@@ -1111,6 +1117,10 @@ namespace ams::dmnt::cheat::impl {
 
     Result ForceOpenCheatProcess() {
         return GetReference(g_cheat_process_manager).ForceOpenCheatProcess();
+    }
+
+    Result ForceCloseCheatProcess() {
+        return GetReference(g_cheat_process_manager).ForceCloseCheatProcess();
     }
 
     Result PauseCheatProcess() {

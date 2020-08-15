@@ -40,6 +40,11 @@ namespace ams::dmnt::cheat {
         return ResultSuccess();
     }
 
+    Result CheatService::ForceCloseCheatProcess() {
+        dmnt::cheat::impl::ForceCloseCheatProcess();
+        return ResultSuccess();
+    }
+
     Result CheatService::PauseCheatProcess() {
         return dmnt::cheat::impl::PauseCheatProcess();
     }

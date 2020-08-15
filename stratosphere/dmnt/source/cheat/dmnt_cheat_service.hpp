@@ -28,6 +28,7 @@ namespace ams::dmnt::cheat {
                 ForceOpenCheatProcess   = 65003,
                 PauseCheatProcess       = 65004,
                 ResumeCheatProcess      = 65005,
+                ForceCloseCheatProcess   = 65009,
 
                 /* Interact with Memory */
                 GetCheatProcessMappingCount = 65100,
@@ -59,6 +60,7 @@ namespace ams::dmnt::cheat {
             void GetCheatProcessEvent(sf::OutCopyHandle out_event);
             Result GetCheatProcessMetadata(sf::Out<CheatProcessMetadata> out_metadata);
             Result ForceOpenCheatProcess();
+            Result ForceCloseCheatProcess();
             Result PauseCheatProcess();
             Result ResumeCheatProcess();
 
@@ -90,6 +92,7 @@ namespace ams::dmnt::cheat {
                 MAKE_SERVICE_COMMAND_META(GetCheatProcessEvent),
                 MAKE_SERVICE_COMMAND_META(GetCheatProcessMetadata),
                 MAKE_SERVICE_COMMAND_META(ForceOpenCheatProcess),
+                MAKE_SERVICE_COMMAND_META(ForceCloseCheatProcess),
                 MAKE_SERVICE_COMMAND_META(PauseCheatProcess),
                 MAKE_SERVICE_COMMAND_META(ResumeCheatProcess),
 
