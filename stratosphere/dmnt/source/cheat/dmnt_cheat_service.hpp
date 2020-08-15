@@ -54,6 +54,7 @@ namespace ams::dmnt::cheat {
             void GetCheatProcessEvent(sf::OutCopyHandle out_event);
             Result GetCheatProcessMetadata(sf::Out<CheatProcessMetadata> out_metadata);
             Result ForceOpenCheatProcess();
+            Result ForceCloseCheatProcess();
             Result PauseCheatProcess();
             Result ResumeCheatProcess();
 
