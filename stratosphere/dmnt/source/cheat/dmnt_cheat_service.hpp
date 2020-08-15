@@ -28,7 +28,7 @@ namespace ams::dmnt::cheat {
                 ForceOpenCheatProcess   = 65003,
                 PauseCheatProcess       = 65004,
                 ResumeCheatProcess      = 65005,
-                ForceCloseCheatProcess   = 65009,
+                ForceCloseCheatProcess  = 65009,
 
                 /* Interact with Memory */
                 GetCheatProcessMappingCount = 65100,
