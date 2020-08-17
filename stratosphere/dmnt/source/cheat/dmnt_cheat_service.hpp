@@ -26,7 +26,7 @@ namespace ams::dmnt::cheat {
             AMS_SF_METHOD_INFO(C, H, 65001, void,   GetCheatProcessEvent,        (sf::OutCopyHandle out_event))                                                           \
             AMS_SF_METHOD_INFO(C, H, 65002, Result, GetCheatProcessMetadata,     (sf::Out<CheatProcessMetadata> out_metadata))                                            \
             AMS_SF_METHOD_INFO(C, H, 65003, Result, ForceOpenCheatProcess,       ())                                                                                      \
-            AMS_SF_METHOD_INFO(C, H, 65009, Result, ForceCloseCheatProcess,       ())                                                                                     \
+            AMS_SF_METHOD_INFO(C, H, 65009, Result, ForceCloseCheatProcess,      ())                                                                                      \
             AMS_SF_METHOD_INFO(C, H, 65004, Result, PauseCheatProcess,           ())                                                                                      \
             AMS_SF_METHOD_INFO(C, H, 65005, Result, ResumeCheatProcess,          ())                                                                                      \
             AMS_SF_METHOD_INFO(C, H, 65100, Result, GetCheatProcessMappingCount, (sf::Out<u64> out_count))                                                                \
