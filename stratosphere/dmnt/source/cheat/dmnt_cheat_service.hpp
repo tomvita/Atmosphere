@@ -24,6 +24,7 @@
     AMS_SF_METHOD_INFO(C, H, 65003, Result, ForceOpenCheatProcess,       (),                                                                                                   ())                             \
     AMS_SF_METHOD_INFO(C, H, 65004, Result, PauseCheatProcess,           (),                                                                                                   ())                             \
     AMS_SF_METHOD_INFO(C, H, 65005, Result, ResumeCheatProcess,          (),                                                                                                   ())                             \
+    AMS_SF_METHOD_INFO(C, H, 65009, Result, ForceCloseCheatProcess,      (),                                                                                                   ())                             \
     AMS_SF_METHOD_INFO(C, H, 65100, Result, GetCheatProcessMappingCount, (sf::Out<u64> out_count),                                                                             (out_count))                    \
     AMS_SF_METHOD_INFO(C, H, 65101, Result, GetCheatProcessMappings,     (const sf::OutArray<MemoryInfo> &mappings, sf::Out<u64> out_count, u64 offset),                       (mappings, out_count, offset))  \
     AMS_SF_METHOD_INFO(C, H, 65102, Result, ReadCheatProcessMemory,      (const sf::OutBuffer &buffer, u64 address, u64 out_size),                                             (buffer, address, out_size))    \
