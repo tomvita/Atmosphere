@@ -1,0 +1,1 @@
+copy dmnt.nsp exefs.nsp 
