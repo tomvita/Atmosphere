@@ -3,7 +3,7 @@
 #include <stdbool.h>
 
 #include <switch.h>
-#include "dmntcht.h"
+// #include "dmntcht.h"
 #define IRAM_PAYLOAD_MAX_SIZE 0x2F000
 #define IRAM_PAYLOAD_BASE 0x40010000
 
@@ -73,12 +73,12 @@ int main(int argc, char **argv)
             printf("Press [+] to reboot to Hekate payload\n");
         }
     }
-    dmntchtInitialize();
-    DmntCheatProcessMetadata metadata;
-    rc = dmntchtGetCheatProcessMetadata(&metadata);
-    printf("rc=%x\n",rc);
-    printf("metadata.main_nso_extents.base=%lx\n",metadata.main_nso_extents.base);
-    dmntchtExit();
+    // dmntchtInitialize();
+    // DmntCheatProcessMetadata metadata;
+    // rc = dmntchtGetCheatProcessMetadata(&metadata);
+    // printf("rc=%x\n",rc);
+    // printf("metadata.main_nso_extents.base=%lx\n",metadata.main_nso_extents.base);
+    // dmntchtExit();
 
     printf("Press [L] to exit\n");
 
