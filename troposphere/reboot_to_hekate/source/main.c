@@ -3,7 +3,7 @@
 #include <stdbool.h>
 
 #include <switch.h>
-
+#include "dmntcht.h"
 #define IRAM_PAYLOAD_MAX_SIZE 0x2F000
 #define IRAM_PAYLOAD_BASE 0x40010000
 
@@ -53,16 +53,19 @@ static void reboot_to_payload(void) {
 int main(int argc, char **argv)
 {
     consoleInit(NULL);
-    
+    padConfigureInput(8, HidNpadStyleSet_NpadStandard);
+
+    PadState pad;
+    padInitializeAny(&pad);
     bool can_reboot = true;
     Result rc = splInitialize();
     if (R_FAILED(rc)) {
         printf("Failed to initialize spl: 0x%x\n", rc);
         can_reboot = false;
     } else {
-        FILE *f = fopen("sdmc:/bootloader/payload.bin", "rb");
+        FILE *f = fopen("sdmc:/hekate.bin", "rb");
         if (f == NULL) {
-            printf("Failed to open bootloader/payload.bin!\n");
+            printf("Failed to open /hekate.bin!\n");
             can_reboot = false;
         } else {
             fread(g_reboot_payload, 1, sizeof(g_reboot_payload), f);
@@ -70,26 +73,34 @@ int main(int argc, char **argv)
             printf("Press [+] to reboot to Hekate payload\n");
         }
     }
-        
+    dmntchtInitialize();
+    DmntCheatProcessMetadata metadata;
+    rc = dmntchtGetCheatProcessMetadata(&metadata);
+    printf("rc=%x\n",rc);
+    printf("metadata.main_nso_extents.base=%lx\n",metadata.main_nso_extents.base);
+    dmntchtExit();
+
     printf("Press [L] to exit\n");
 
     // Main loop
     while(appletMainLoop())
     {
+        padUpdate(&pad);
+        u64 kDown = padGetButtonsDown(&pad);
         //Scan all the inputs. This should be done once for each frame
-        hidScanInput();
+        // hidScanInput();
 
-        u64 kDown = 0;
+        // u64 kDown = 0;
 
-        for (int controller = 0; controller < 10; controller++) {
-            // hidKeysDown returns information about which buttons have been just pressed (and they weren't in the previous frame)
-            kDown |= hidKeysDown((HidControllerID) controller);
-        }
+        // for (int controller = 0; controller < 10; controller++) {
+        //     // hidKeysDown returns information about which buttons have been just pressed (and they weren't in the previous frame)
+        //     kDown |= hidKeysDown((HidControllerID) controller);
+        // }
 
-        if (can_reboot && kDown & KEY_PLUS) {
+        if (can_reboot && kDown & HidNpadButton_Plus) {
             reboot_to_payload();
         }
-        if (kDown & KEY_L)  { break; } // break in order to return to hbmenu 
+        if (kDown & HidNpadButton_L)  { break; } // break in order to return to hbmenu 
 
         consoleUpdate(NULL);
     }
