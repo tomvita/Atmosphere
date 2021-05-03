@@ -729,7 +729,7 @@ namespace ams::dmnt::cheat::impl {
     void CheatVirtualMachine::ResetState() {
         for (size_t i = 0; i < CheatVirtualMachine::NumRegisters; i++) {
             this->registers[i] = 0;
-            this->saved_values[i] = 0;
+            // this->saved_values[i] = 0;
             this->loop_tops[i] = 0;
         }
         this->instruction_ptr = 0;
