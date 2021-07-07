@@ -516,13 +516,18 @@ namespace ams::dmnt::cheat::impl {
 
                     R_UNLESS(def.num_opcodes != 0,                       ResultCheatInvalid());
                     R_UNLESS(def.num_opcodes <= util::size(def.opcodes), ResultCheatInvalid());
-
-                    CheatEntry *new_entry = this->GetFreeCheatEntry();
-                    R_UNLESS(new_entry != nullptr, ResultCheatOutOfResource());
+                    CheatEntry *new_entry = nullptr;
+                    if (std::strncmp(def.readable_name, "master code", sizeof("master code")) == 0) {  //(def.readable_name[0x3F] == 234)make (std::strncmp(this->cheat_entries[i].definition.readable_name, readable_name, sizeof(this->cheat_entries[i].definition.readable_name)) == 0)
+                        new_entry = &this->cheat_entries[0];
+                        enabled = true;
+                    } else {
+                        new_entry = this->GetFreeCheatEntry();
+                        R_UNLESS(new_entry != nullptr, ResultCheatOutOfResource());
+                    };
 
                     new_entry->enabled = enabled;
                     new_entry->definition = def;
-
+                    *out_id = new_entry->cheat_id;
                     /* Trigger a VM reload. */
                     this->SetNeedsReloadVm(true);
 
