@@ -129,6 +129,7 @@ namespace ams::dmnt::cheat::impl {
                 this->LogToDebugFile("Reg Idx:   %x\n", opcode->ldr_memory.reg_index);
                 this->LogToDebugFile("Mem Type:  %x\n", opcode->ldr_memory.mem_type);
                 this->LogToDebugFile("From Reg:  %d\n", opcode->ldr_memory.load_from_reg);
+                this->LogToDebugFile("From mem type base + Reg:  %d\n", opcode->ldr_memory.load_from_reg_and_mem_type_base);
                 this->LogToDebugFile("Rel Addr:  %lx\n", opcode->ldr_memory.rel_address);
                 break;
             case CheatVmOpcodeType_StoreStaticToAddress:
@@ -421,7 +422,8 @@ namespace ams::dmnt::cheat::impl {
                     opcode.ldr_memory.bit_width = (first_dword >> 24) & 0xF;
                     opcode.ldr_memory.mem_type = (MemoryAccessType)((first_dword >> 20) & 0xF);
                     opcode.ldr_memory.reg_index = ((first_dword >> 16) & 0xF);
-                    opcode.ldr_memory.load_from_reg = ((first_dword >> 12) & 0xF) != 0;
+                    opcode.ldr_memory.load_from_reg = ((first_dword >> 12) & 0xF) == 1;
+                    opcode.ldr_memory.load_from_reg_and_mem_type_base = ((first_dword >> 12) & 0xF) == 2;
                     opcode.ldr_memory.rel_address = ((u64)(first_dword & 0xFF) << 32ul) | ((u64)second_dword);
                 }
                 break;
@@ -882,6 +884,8 @@ namespace ams::dmnt::cheat::impl {
                         u64 src_address;
                         if (cur_opcode.ldr_memory.load_from_reg) {
                             src_address = this->registers[cur_opcode.ldr_memory.reg_index] + cur_opcode.ldr_memory.rel_address;
+                        } else if (cur_opcode.ldr_memory.load_from_reg_and_mem_type_base) {
+                            src_address = GetCheatProcessAddress(metadata, cur_opcode.ldr_memory.mem_type, this->registers[cur_opcode.ldr_memory.reg_index] + cur_opcode.ldr_memory.rel_address);
                         } else {
                             src_address = GetCheatProcessAddress(metadata, cur_opcode.ldr_memory.mem_type, cur_opcode.ldr_memory.rel_address);
                         }
