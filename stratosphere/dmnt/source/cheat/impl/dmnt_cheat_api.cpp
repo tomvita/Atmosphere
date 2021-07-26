@@ -908,6 +908,15 @@ namespace ams::dmnt::cheat::impl {
 
                     /* Skip onwards. */
                     i = j + 1;
+                } else if (s[i] == '(') {
+                    size_t j = i + 1;
+                    while (s[j] != ')') {
+                        j++;
+                        if (j >= len) {
+                            return false;
+                        }
+                    }
+                    i = j + 1;
                 } else if (s[i] == '{') {
                     /* We're parsing a master cheat. */
                     cur_entry = &this->cheat_entries[0];
