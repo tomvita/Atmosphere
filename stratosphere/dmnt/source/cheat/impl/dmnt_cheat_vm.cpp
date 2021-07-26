@@ -1228,6 +1228,8 @@ namespace ams::dmnt::cheat::impl {
                     } else {
                         /* Store a register to a static register. */
                         this->static_registers[cur_opcode.rw_static_reg.static_idx] = this->registers[cur_opcode.rw_static_reg.idx];
+                        if (cur_opcode.rw_static_reg.static_idx < (NumReadableStaticRegisters + NumLoopbackStaticRegisters))
+                            this->static_registers[cur_opcode.rw_static_reg.static_idx - NumReadableStaticRegisters] = this->registers[cur_opcode.rw_static_reg.idx];
                     }
                     break;
                 case CheatVmOpcodeType_PauseProcess:

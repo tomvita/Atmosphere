@@ -273,6 +273,7 @@ namespace ams::dmnt::cheat::impl {
             constexpr static size_t NumRegisters = 0x10;
             constexpr static size_t NumReadableStaticRegisters = 0x80;
             constexpr static size_t NumWritableStaticRegisters = 0x80;
+            constexpr static size_t NumLoopbackStaticRegisters = 0x10;
             constexpr static size_t NumStaticRegisters = NumReadableStaticRegisters + NumWritableStaticRegisters;
         private:
             size_t num_opcodes = 0;
