@@ -123,7 +123,7 @@ namespace {
     constexpr size_t          DebugMonitorMaxSessions = 4;
 
     constexpr sm::ServiceName CheatServiceName = sm::ServiceName::Encode("dmnt:cht");
-    constexpr size_t          CheatMaxSessions = 2;
+    constexpr size_t          CheatMaxSessions = 3;
 
     /* dmnt:-, dmnt:cht. */
     constexpr size_t NumServers  = 2;
