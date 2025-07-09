@@ -148,10 +148,11 @@ namespace ams {
 
         dmnt::InitializeGdbServer2();
 
-        /* TODO */
-        while (true) {
-            os::SleepThread(TimeSpan::FromDays(1));
-        }
+        /* Initialize ipc server. */
+        InitializeIpcServer();
+
+        /* Loop processing ipc server. */
+        LoopProcessIpcServer();
     }
 
 }
