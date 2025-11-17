@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -34,7 +34,7 @@ namespace ams::os::impl {
         event->timer_state = TimerEventType::TimerState_Stop;
     }
 
-    bool UpdateSignalStateAndRecalculateNextTimeToWakeupUnsafe(TimerEventType *event, TimeSpan cur_time) {
+    bool UpdateSignalStateAndRecalcNextTimeToWakeupUnsafe(TimerEventType *event, TimeSpan cur_time) {
         TimeSpan next_time = GetReference(event->next_time_to_wakeup);
 
         switch (event->timer_state) {

@@ -1,26 +1,42 @@
-TARGETS := kernel.bin kernel_ldr.bin
-CLEAN_TARGETS := $(foreach target,$(TARGETS),$(target:.bin=)-clean)
+ATMOSPHERE_BUILD_CONFIGS :=
+all: nx_release
 
-SUBFOLDERS := $(MODULES)
+THIS_MAKEFILE     := $(abspath $(lastword $(MAKEFILE_LIST)))
+CURRENT_DIRECTORY := $(abspath $(dir $(THIS_MAKEFILE)))
 
-all: mesosphere.bin
+define ATMOSPHERE_ADD_TARGET
 
-clean: $(CLEAN_TARGETS)
-	@rm -f mesosphere.bin
+ATMOSPHERE_BUILD_CONFIGS += $(strip $1)
 
-mesosphere.bin: $(TARGETS)
-	@python build_mesosphere.py
-	@echo "Built mesosphere.bin..."
+$(strip $1):
+	@echo "Building $(strip $1)"
+	@$$(MAKE) -f $(CURRENT_DIRECTORY)/mesosphere.mk ATMOSPHERE_MAKEFILE_TARGET="$(strip $1)" ATMOSPHERE_BUILD_NAME="$(strip $2)" ATMOSPHERE_BOARD="$(strip $3)" ATMOSPHERE_CPU="$(strip $4)" $(strip $5)
 
-$(TARGETS): check_libmeso
-	$(MAKE) -C $(@:.bin=)
-	@cp $(@:.bin=)/$(@) $(@)
+clean-$(strip $1):
+	@echo "Cleaning $(strip $1)"
+	@$$(MAKE) -f $(CURRENT_DIRECTORY)/mesosphere.mk clean ATMOSPHERE_MAKEFILE_TARGET="$(strip $1)" ATMOSPHERE_BUILD_NAME="$(strip $2)" ATMOSPHERE_BOARD="$(strip $3)" ATMOSPHERE_CPU="$(strip $4)" $(strip $5)
 
-check_libmeso:
-	@$(MAKE) --no-print-directory -C ../libraries/libmesosphere
+endef
 
-$(CLEAN_TARGETS):
-	$(MAKE) -C $(@:-clean=) clean
-	@rm -f $(@:-clean=).bin
+define ATMOSPHERE_ADD_TARGETS
 
-.PHONY: all clean $(CLEAN_TARGETS)
+$(eval $(call ATMOSPHERE_ADD_TARGET, $(strip $1)_release, release, $(strip $2), $(strip $3), \
+    ATMOSPHERE_BUILD_SETTINGS="$(strip $4)" \
+))
+
+$(eval $(call ATMOSPHERE_ADD_TARGET, $(strip $1)_debug, debug, $(strip $2), $(strip $3), \
+    ATMOSPHERE_BUILD_SETTINGS="$(strip $4) -DAMS_BUILD_FOR_DEBUGGING" ATMOSPHERE_BUILD_FOR_DEBUGGING=1 \
+))
+
+$(eval $(call ATMOSPHERE_ADD_TARGET, $(strip $1)_audit, audit, $(strip $2), $(strip $3), \
+    ATMOSPHERE_BUILD_SETTINGS="$(strip $4) -DAMS_BUILD_FOR_AUDITING" ATMOSPHERE_BUILD_FOR_DEBUGGING=1 ATMOSPHERE_BUILD_FOR_AUDITING=1 \
+))
+
+endef
+
+$(eval $(call ATMOSPHERE_ADD_TARGETS, nx, nx-hac-001, arm-cortex-a57,))
+$(eval $(call ATMOSPHERE_ADD_TARGETS, qemu_virt_a57, qemu-virt, arm-cortex-a57,))
+
+clean: $(foreach config,$(ATMOSPHERE_BUILD_CONFIGS),clean-$(config))
+
+.PHONY: all clean $(foreach config,$(ATMOSPHERE_BUILD_CONFIGS), $(config) clean-$(config))

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,7 +18,7 @@
 
 namespace ams::ncm {
 
-    struct alignas(8) PlaceHolderId {
+    struct PlaceHolderId {
         util::Uuid uuid;
 
         bool operator==(const PlaceHolderId &other) const {
@@ -38,7 +38,7 @@ namespace ams::ncm {
         }
     };
 
-    static_assert(alignof(PlaceHolderId) == 8);
+    static_assert(alignof(PlaceHolderId) == 1);
 
     constexpr inline PlaceHolderId InvalidPlaceHolderId = { util::InvalidUuid };
 

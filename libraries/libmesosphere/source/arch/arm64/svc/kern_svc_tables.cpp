@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -36,6 +36,10 @@ namespace ams::kern::svc {
     /* Declare special prototype for (unsupported) CallCallSecureMonitor64From32. */
     void CallCallSecureMonitor64From32();
 
+    /* Declare special prototypes for WaitForAddress. */
+    void CallWaitForAddress64();
+    void CallWaitForAddress64From32();
+
     namespace {
 
         #ifndef MESOSPHERE_USE_STUBBED_SVC_TABLES
@@ -59,6 +63,7 @@ namespace ams::kern::svc {
 
         /* Set omit-frame-pointer to prevent GCC from emitting MOV X29, SP instructions. */
         #pragma GCC push_options
+        #pragma GCC optimize ("-O3")
         #pragma GCC optimize ("omit-frame-pointer")
 
             AMS_SVC_FOREACH_KERN_DEFINITION(DECLARE_SVC_STRUCT, _)
@@ -80,6 +85,8 @@ namespace ams::kern::svc {
 
             table[svc::SvcId_CallSecureMonitor]    = CallCallSecureMonitor64From32;
 
+            table[svc::SvcId_WaitForAddress]       = CallWaitForAddress64From32;
+
             return table;
         }();
 
@@ -95,6 +102,8 @@ namespace ams::kern::svc {
             table[svc::SvcId_ReplyAndReceiveLight] = CallReplyAndReceiveLight64;
 
             table[svc::SvcId_ReturnFromException]  = CallReturnFromException64;
+
+            table[svc::SvcId_WaitForAddress]       = CallWaitForAddress64;
 
             return table;
         }();
@@ -141,10 +150,10 @@ namespace ams::kern::svc {
                     /* Get the target firmware. */
                     const auto target_fw = kern::GetTargetFirmware();
 
-                    /* 10.0.0 broke the ABI for QueryIoMapping. */
+                    /* 10.0.0 broke the ABI for QueryIoMapping, and renamed it to QueryMemoryMapping. */
                     if (target_fw < TargetFirmware_10_0_0) {
-                        if (table_64)         { ::ams::kern::svc::PatchSvcTableEntry(table_64,         svc::SvcId_QueryIoMapping, LegacyQueryIoMapping::Call64); }
-                        if (table_64_from_32) { ::ams::kern::svc::PatchSvcTableEntry(table_64_from_32, svc::SvcId_QueryIoMapping, LegacyQueryIoMapping::Call64From32); }
+                        if (table_64)         { ::ams::kern::svc::PatchSvcTableEntry(table_64,         svc::SvcId_QueryMemoryMapping, LegacyQueryIoMapping::Call64); }
+                        if (table_64_from_32) { ::ams::kern::svc::PatchSvcTableEntry(table_64_from_32, svc::SvcId_QueryMemoryMapping, LegacyQueryIoMapping::Call64From32); }
                     }
 
                     /* 6.0.0 broke the ABI for GetFutureThreadInfo, and renamed it to GetDebugFutureThreadInfo. */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -16,7 +16,7 @@
 #include <stratosphere.hpp>
 #include "ldr_capabilities.hpp"
 
-namespace ams::ldr::caps {
+namespace ams::ldr {
 
     namespace {
 
@@ -44,7 +44,7 @@ namespace ams::ldr::caps {
             constexpr ALWAYS_INLINE typename name::Type Get##name() const { return this->Get<name>(); }
 
         constexpr ALWAYS_INLINE CapabilityId GetCapabilityId(util::BitPack32 cap) {
-            return static_cast<CapabilityId>(__builtin_ctz(~cap.value));
+            return static_cast<CapabilityId>(util::CountTrailingZeros<u32>(~cap.value));
         }
 
         constexpr inline util::BitPack32 EmptyCapability = {~u32{}};
@@ -59,15 +59,15 @@ namespace ams::ldr::caps {
                 using IdBits   = CapabilityField<0, static_cast<size_t>(Id) + 1>;                                               \
                 static constexpr u32 IdBitsValue = (static_cast<u32>(1) << static_cast<size_t>(Id)) - 1;                        \
             private:                                                                                                            \
-                util::BitPack32 value;                                                                                          \
+                util::BitPack32 m_value;                                                                                        \
             private:                                                                                                            \
                 template<typename FieldType>                                                                                    \
-                constexpr ALWAYS_INLINE typename FieldType::Type Get() const { return this->value.Get<FieldType>(); }           \
+                constexpr ALWAYS_INLINE typename FieldType::Type Get() const { return m_value.Get<FieldType>(); }               \
                 template<typename FieldType>                                                                                    \
-                constexpr ALWAYS_INLINE void Set(typename FieldType::Type fv) { this->value.Set<FieldType>(fv); }               \
-                constexpr ALWAYS_INLINE u32 GetValue() const { return this->value.value; }                                      \
+                constexpr ALWAYS_INLINE void Set(typename FieldType::Type fv) { m_value.Set<FieldType>(fv); }                   \
+                constexpr ALWAYS_INLINE u32 GetValue() const { return m_value.value; }                                          \
             public:                                                                                                             \
-                constexpr ALWAYS_INLINE CAPABILITY_CLASS_NAME(id)(util::BitPack32 v) : value{v} { /* ... */ }                   \
+                constexpr ALWAYS_INLINE CAPABILITY_CLASS_NAME(id)(util::BitPack32 v) : m_value{v} { /* ... */ }                 \
                                                                                                                                 \
                 static constexpr CAPABILITY_CLASS_NAME(id) Decode(util::BitPack32 v) { return CAPABILITY_CLASS_NAME(id)(v); }   \
                                                                                                                                 \
@@ -186,7 +186,7 @@ namespace ams::ldr::caps {
         );
 
         enum class MemoryRegionType : u32 {
-            None              = 0,
+            NoMapping         = 0,
             KernelTraceBuffer = 1,
             OnMemoryBootImage = 2,
             DTB               = 3,
@@ -200,17 +200,31 @@ namespace ams::ldr::caps {
             DEFINE_CAPABILITY_FIELD(Region2,   ReadOnly1, 6, MemoryRegionType);
             DEFINE_CAPABILITY_FIELD(ReadOnly2, Region2,   1, bool);
 
-            bool IsValid(const util::BitPack32 *kac, size_t kac_count) const {
-                for (size_t i = 0; i < kac_count; i++) {
-                    if (GetCapabilityId(kac[i]) == Id) {
-                        const auto restriction = Decode(kac[i]);
+            static bool IsValidRegionType(const util::BitPack32 *kac, size_t kac_count, MemoryRegionType region_type, bool is_read_only) {
+                if (region_type != MemoryRegionType::NoMapping) {
+                    for (size_t i = 0; i < kac_count; i++) {
+                        if (GetCapabilityId(kac[i]) == Id) {
+                            const auto restriction = Decode(kac[i]);
 
-                        if (this->GetValue() == restriction.GetValue()) {
-                            return true;
+                            if ((restriction.GetRegion0() == region_type && (is_read_only || !restriction.GetReadOnly0())) ||
+                                (restriction.GetRegion1() == region_type && (is_read_only || !restriction.GetReadOnly1())) ||
+                                (restriction.GetRegion2() == region_type && (is_read_only || !restriction.GetReadOnly2())))
+                            {
+                                return true;
+                            }
                         }
                     }
+
+                    return false;
+                } else {
+                    return true;
                 }
-                return false;
+            }
+
+            bool IsValid(const util::BitPack32 *kac, size_t kac_count) const {
+                return IsValidRegionType(kac, kac_count, this->GetRegion0(), this->GetReadOnly0()) &&
+                       IsValidRegionType(kac, kac_count, this->GetRegion1(), this->GetReadOnly1()) &&
+                       IsValidRegionType(kac, kac_count, this->GetRegion2(), this->GetReadOnly2());
             }
         );
 
@@ -294,10 +308,19 @@ namespace ams::ldr::caps {
         );
 
         DEFINE_CAPABILITY_CLASS(DebugFlags,
-            DEFINE_CAPABILITY_FIELD(AllowDebug, IdBits,     1, bool);
-            DEFINE_CAPABILITY_FIELD(ForceDebug, AllowDebug, 1, bool);
+            DEFINE_CAPABILITY_FIELD(AllowDebug,     IdBits,         1, bool);
+            DEFINE_CAPABILITY_FIELD(ForceDebugProd, AllowDebug,     1, bool);
+            DEFINE_CAPABILITY_FIELD(ForceDebug,     ForceDebugProd, 1, bool);
 
             bool IsValid(const util::BitPack32 *kac, size_t kac_count) const {
+                u32 total = 0;
+                if (this->GetAllowDebug()) { ++total; }
+                if (this->GetForceDebugProd()) { ++total; }
+                if (this->GetForceDebug()) { ++total; }
+                if (total > 1) {
+                    return false;
+                }
+
                 for (size_t i = 0; i < kac_count; i++) {
                     if (GetCapabilityId(kac[i]) == Id) {
                         const auto restriction = Decode(kac[i]);
@@ -305,12 +328,14 @@ namespace ams::ldr::caps {
                         return (restriction.GetValue() & this->GetValue()) == this->GetValue();
                     }
                 }
+
                 return false;
             }
 
-            static constexpr util::BitPack32 Encode(bool allow_debug, bool force_debug) {
+            static constexpr util::BitPack32 Encode(bool allow_debug, bool force_debug_prod, bool force_debug) {
                 util::BitPack32 encoded{IdBitsValue};
                 encoded.Set<AllowDebug>(allow_debug);
+                encoded.Set<ForceDebugProd>(force_debug_prod);
                 encoded.Set<ForceDebug>(force_debug);
                 return encoded;
             }
@@ -319,19 +344,14 @@ namespace ams::ldr::caps {
     }
 
     /* Capabilities API. */
-    Result ValidateCapabilities(const void *acid_kac, size_t acid_kac_size, const void *aci_kac, size_t aci_kac_size) {
-        const util::BitPack32 *acid_caps = reinterpret_cast<const util::BitPack32 *>(acid_kac);
-        const util::BitPack32 *aci_caps  = reinterpret_cast<const util::BitPack32 *>(aci_kac);
-        const size_t num_acid_caps = acid_kac_size / sizeof(*acid_caps);
-        const size_t num_aci_caps = aci_kac_size / sizeof(*aci_caps);
-
-        for (size_t i = 0; i < num_aci_caps; i++) {
-            const auto cur_cap = aci_caps[i];
-            const auto id = GetCapabilityId(cur_cap);
+    Result TestCapability(const util::BitPack32 *kacd, size_t kacd_count, const util::BitPack32 *kac, size_t kac_count) {
+        for (size_t i = 0; i < kac_count; i++) {
+            const auto cap = kac[i];
+            const auto id = GetCapabilityId(cap);
 
 #define VALIDATE_CASE(id) \
                 case CapabilityId::id: \
-                    R_UNLESS(Capability##id::Decode(cur_cap).IsValid(acid_caps, num_acid_caps), ldr::ResultInvalidCapability##id()); \
+                    R_UNLESS(Capability##id::Decode(cap).IsValid(kacd, kacd_count), ldr::ResultInvalidCapability##id()); \
                     break
             switch (id) {
                 VALIDATE_CASE(KernelFlags);
@@ -347,8 +367,8 @@ namespace ams::ldr::caps {
                     {
                         /* Map Range needs extra logic because there it involves two sequential caps. */
                         i++;
-                        R_UNLESS(i < num_aci_caps, ldr::ResultInvalidCapabilityMapRange());
-                        R_UNLESS(CapabilityMapRange::Decode(cur_cap).IsValid(aci_caps[i], acid_caps, num_acid_caps), ldr::ResultInvalidCapabilityMapRange());
+                        R_UNLESS(i < kac_count, ldr::ResultInvalidCapabilityMapRange());
+                        R_UNLESS(CapabilityMapRange::Decode(cap).IsValid(kac[i], kacd, kacd_count), ldr::ResultInvalidCapabilityMapRange());
                     }
                     break;
                 default:
@@ -358,28 +378,26 @@ namespace ams::ldr::caps {
 #undef VALIDATE_CASE
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
-    u16 GetProgramInfoFlags(const void *kac, size_t kac_size) {
-        const util::BitPack32 *caps = reinterpret_cast<const util::BitPack32 *>(kac);
-        const size_t num_caps = kac_size / sizeof(*caps);
+    u16 MakeProgramInfoFlag(const util::BitPack32 *kac, size_t count) {
         u16 flags = 0;
 
-        for (size_t i = 0; i < num_caps; i++) {
-            const auto cur_cap = caps[i];
+        for (size_t i = 0; i < count; ++i) {
+            const auto cap = kac[i];
 
-            switch (GetCapabilityId(cur_cap)) {
+            switch (GetCapabilityId(cap)) {
                 case CapabilityId::ApplicationType:
                     {
-                        const auto app_type = CapabilityApplicationType::Decode(cur_cap).GetApplicationType() & ProgramInfoFlag_ApplicationTypeMask;
+                        const auto app_type = CapabilityApplicationType::Decode(cap).GetApplicationType() & ProgramInfoFlag_ApplicationTypeMask;
                         if (app_type != ProgramInfoFlag_InvalidType) {
                             flags |= app_type;
                         }
                     }
                     break;
                 case CapabilityId::DebugFlags:
-                    if (CapabilityDebugFlags::Decode(cur_cap).GetAllowDebug()) {
+                    if (CapabilityDebugFlags::Decode(cap).GetAllowDebug()) {
                         flags |= ProgramInfoFlag_AllowDebug;
                     }
                     break;
@@ -391,18 +409,15 @@ namespace ams::ldr::caps {
         return flags;
     }
 
-    void SetProgramInfoFlags(u16 flags, void *kac, size_t kac_size) {
-        util::BitPack32 *caps = reinterpret_cast<util::BitPack32 *>(kac);
-        const size_t num_caps = kac_size / sizeof(*caps);
-
-        for (size_t i = 0; i < num_caps; i++) {
-            const auto cur_cap = caps[i];
-            switch (GetCapabilityId(cur_cap)) {
+    void UpdateProgramInfoFlag(u16 flags, util::BitPack32 *kac, size_t count) {
+        for (size_t i = 0; i < count; ++i) {
+            const auto cap = kac[i];
+            switch (GetCapabilityId(cap)) {
                 case CapabilityId::ApplicationType:
-                    caps[i] = CapabilityApplicationType::Encode(flags & ProgramInfoFlag_ApplicationTypeMask);
+                    kac[i] = CapabilityApplicationType::Encode(flags & ProgramInfoFlag_ApplicationTypeMask);
                     break;
                 case CapabilityId::DebugFlags:
-                    caps[i] = CapabilityDebugFlags::Encode((flags & ProgramInfoFlag_AllowDebug) != 0, CapabilityDebugFlags::Decode(cur_cap).GetForceDebug());
+                    kac[i] = CapabilityDebugFlags::Encode((flags & ProgramInfoFlag_AllowDebug) != 0, CapabilityDebugFlags::Decode(cap).GetForceDebugProd(), CapabilityDebugFlags::Decode(cap).GetForceDebug());
                     break;
                 default:
                     break;
@@ -410,24 +425,25 @@ namespace ams::ldr::caps {
         }
     }
 
-    void ProcessCapabilities(void *kac, size_t kac_size) {
-        util::BitPack32 *caps = reinterpret_cast<util::BitPack32 *>(kac);
-        const size_t num_caps = kac_size / sizeof(*caps);
-
-        for (size_t i = 0; i < num_caps; i++) {
-            const auto cur_cap = caps[i];
-            switch (GetCapabilityId(cur_cap)) {
-                case CapabilityId::MapRegion:
-                    {
-                        /* MapRegion was added in 8.0.0+. */
-                        /* To prevent kernel error, we should reject the descriptor on lower firmwares. */
-                        /* NOTE: We also allow it on any firmware under mesosphere, as an extension. */
-                        const bool is_allowed = (hos::GetVersion() >= hos::Version_8_0_0 || svc::IsKernelMesosphere());
-                        if (!is_allowed) {
-                            caps[i] = EmptyCapability;
-                        }
-                    }
+    void FixDebugCapabilityForHbl(util::BitPack32 *kac, size_t count) {
+        for (size_t i = 0; i < count; ++i) {
+            const auto cap = kac[i];
+            switch (GetCapabilityId(cap)) {
+                case CapabilityId::DebugFlags:
+                    /* 19.0.0+ disallows more than one flag set; we are always DebugMode for kernel, so ForceDebug is the most powerful/flexible flag to set. */
+                    kac[i] = CapabilityDebugFlags::Encode(false, false, true);
                     break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    void PreProcessCapability(util::BitPack32 *kac, size_t count) {
+        for (size_t i = 0; i < count; ++i) {
+            const auto cap = kac[i];
+            switch (GetCapabilityId(cap)) {
+                /* NOTE: Currently, there is no pre-processing necessary. */
                 default:
                     break;
             }

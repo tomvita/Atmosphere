@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,6 +18,7 @@
 
 namespace ams::fs {
 
+    /* ACCURATE_TO_VERSION: Unknown */
     enum Priority {
         Priority_Realtime = 0,
         Priority_Normal   = 1,

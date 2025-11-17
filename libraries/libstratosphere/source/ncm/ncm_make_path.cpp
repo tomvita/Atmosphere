@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -20,7 +20,7 @@ namespace ams::ncm {
     namespace {
 
         void MakeContentName(PathString *out, ContentId id) {
-            out->SetFormat("%s.nca", GetContentIdString(id).data);
+            out->AssignFormat("%s.nca", GetContentIdString(id).data);
         }
 
         void MakePlaceHolderName(PathString *out, PlaceHolderId id) {
@@ -29,7 +29,7 @@ namespace ams::ncm {
 
             /* Create a hex string from bytes. */
             for (size_t i = 0; i < sizeof(bytes); i++) {
-                std::snprintf(tmp, util::size(tmp), "%02x", bytes[i]);
+                util::SNPrintf(tmp, util::size(tmp), "%02x", bytes[i]);
                 out->Append(tmp);
             }
 
@@ -39,19 +39,19 @@ namespace ams::ncm {
 
         u16 Get16BitSha256HashPrefix(ContentId id) {
             u8 hash[crypto::Sha256Generator::HashSize];
-            crypto::GenerateSha256Hash(hash, sizeof(hash), std::addressof(id), sizeof(id));
+            crypto::GenerateSha256(hash, sizeof(hash), std::addressof(id), sizeof(id));
             return static_cast<u16>(hash[0]) | (static_cast<u16>(hash[1]) << 8);
         }
 
         u8 Get8BitSha256HashPrefix(ContentId id) {
             u8 hash[crypto::Sha256Generator::HashSize];
-            crypto::GenerateSha256Hash(hash, sizeof(hash), std::addressof(id), sizeof(id));
+            crypto::GenerateSha256(hash, sizeof(hash), std::addressof(id), sizeof(id));
             return hash[0];
         }
 
         u8 Get8BitSha256HashPrefix(PlaceHolderId id) {
             u8 hash[crypto::Sha256Generator::HashSize];
-            crypto::GenerateSha256Hash(hash, sizeof(hash), std::addressof(id), sizeof(id));
+            crypto::GenerateSha256(hash, sizeof(hash), std::addressof(id), sizeof(id));
             return hash[0];
         }
 
@@ -63,7 +63,7 @@ namespace ams::ncm {
         MakeContentName(std::addressof(content_name), content_id);
 
         /* Format the output path. */
-        out->SetFormat("%s/%s", root_path, content_name.Get());
+        out->AssignFormat("%s/%s", root_path, content_name.Get());
     }
 
     void MakeSha256HierarchicalContentFilePath_ForFat4KCluster(PathString *out, ContentId content_id, const char *root_path) {
@@ -77,7 +77,7 @@ namespace ams::ncm {
         MakeContentName(std::addressof(content_name), content_id);
 
         /* Format the output path. */
-        out->SetFormat("%s/%08X/%08X/%s", root_path, hash_upper, hash_lower, content_name.Get());
+        out->AssignFormat("%s/%08X/%08X/%s", root_path, hash_upper, hash_lower, content_name.Get());
     }
 
     void MakeSha256HierarchicalContentFilePath_ForFat32KCluster(PathString *out, ContentId content_id, const char *root_path) {
@@ -89,7 +89,7 @@ namespace ams::ncm {
         MakeContentName(std::addressof(content_name), content_id);
 
         /* Format the output path. */
-        out->SetFormat("%s/%08X/%s", root_path, hash, content_name.Get());
+        out->AssignFormat("%s/%08X/%s", root_path, hash, content_name.Get());
     }
 
     void MakeSha256HierarchicalContentFilePath_ForFat16KCluster(PathString *out, ContentId content_id, const char *root_path) {
@@ -101,7 +101,7 @@ namespace ams::ncm {
         MakeContentName(std::addressof(content_name), content_id);
 
         /* Format the output path. */
-        out->SetFormat("%s/%08X/%s", root_path, hash_byte, content_name.Get());
+        out->AssignFormat("%s/%08X/%s", root_path, hash_byte, content_name.Get());
     }
 
     size_t GetHierarchicalContentDirectoryDepth(MakeContentPathFunction func) {
@@ -123,7 +123,7 @@ namespace ams::ncm {
         MakePlaceHolderName(std::addressof(placeholder_name), placeholder_id);
 
         /* Format the output path. */
-        out->SetFormat("%s/%s", root_path, placeholder_name.Get());
+        out->AssignFormat("%s/%s", root_path, placeholder_name.Get());
     }
 
     void MakeSha256HierarchicalPlaceHolderFilePath_ForFat16KCluster(PathString *out, PlaceHolderId placeholder_id, const char *root_path) {
@@ -135,7 +135,7 @@ namespace ams::ncm {
         MakePlaceHolderName(std::addressof(placeholder_name), placeholder_id);
 
         /* Format the output path. */
-        out->SetFormat("%s/%08X/%s", root_path, hash_byte, placeholder_name.Get());
+        out->AssignFormat("%s/%08X/%s", root_path, hash_byte, placeholder_name.Get());
     }
 
     size_t GetHierarchicalPlaceHolderDirectoryDepth(MakePlaceHolderPathFunction func) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -21,34 +21,33 @@
 
 namespace ams::erpt::srv {
 
+    extern ams::sf::ExpHeapAllocator g_sf_allocator;
+
     namespace {
 
         template<typename Interface, typename Impl>
-        ALWAYS_INLINE Result OpenInterface(ams::sf::Out<std::shared_ptr<Interface>> &out) {
-            /* Define holder type. */
-            using Holder = typename Interface::ImplHolder<Impl>;
-
+        ALWAYS_INLINE Result OpenInterface(ams::sf::Out<ams::sf::SharedPointer<Interface>> &out) {
             /* Create an interface holder. */
-            auto intf = std::shared_ptr<Holder>(new (std::nothrow) Holder);
+            auto intf = ams::sf::ObjectFactory<ams::sf::ExpHeapAllocator::Policy>::CreateSharedEmplaced<Interface, Impl>(std::addressof(g_sf_allocator));
             R_UNLESS(intf != nullptr, erpt::ResultOutOfMemory());
 
             /* Return it. */
-            out.SetValue(std::move(intf));
-            return ResultSuccess();
+            out.SetValue(intf);
+            R_SUCCEED();
         }
 
     }
 
-    Result SessionImpl::OpenReport(ams::sf::Out<std::shared_ptr<erpt::sf::IReport>> out) {
-        return OpenInterface<erpt::sf::IReport, ReportImpl>(out);
+    Result SessionImpl::OpenReport(ams::sf::Out<ams::sf::SharedPointer<erpt::sf::IReport>> out) {
+        R_RETURN((OpenInterface<erpt::sf::IReport, ReportImpl>(out)));
     }
 
-    Result SessionImpl::OpenManager(ams::sf::Out<std::shared_ptr<erpt::sf::IManager>> out) {
-        return OpenInterface<erpt::sf::IManager, ManagerImpl>(out);
+    Result SessionImpl::OpenManager(ams::sf::Out<ams::sf::SharedPointer<erpt::sf::IManager>> out) {
+        R_RETURN((OpenInterface<erpt::sf::IManager, ManagerImpl>(out)));
     }
 
-    Result SessionImpl::OpenAttachment(ams::sf::Out<std::shared_ptr<erpt::sf::IAttachment>> out) {
-        return OpenInterface<erpt::sf::IAttachment, AttachmentImpl>(out);
+    Result SessionImpl::OpenAttachment(ams::sf::Out<ams::sf::SharedPointer<erpt::sf::IAttachment>> out) {
+        R_RETURN((OpenInterface<erpt::sf::IAttachment, AttachmentImpl>(out)));
     }
 
 }

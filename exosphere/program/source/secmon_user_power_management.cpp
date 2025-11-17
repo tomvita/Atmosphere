@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -14,7 +14,9 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <exosphere.hpp>
+#include "secmon_cpu_context.hpp"
 #include "secmon_page_mapper.hpp"
+#include "secmon_mariko_fatal_error.hpp"
 #include "secmon_user_power_management.hpp"
 
 #include "rebootstub_bin.h"
@@ -68,6 +70,15 @@ namespace ams::secmon {
 
     }
 
+    void PerformUserRebootByPmic() {
+        /* Ensure that i2c-5 is usable for communicating with the pmic. */
+        clkrst::EnableI2c5Clock();
+        i2c::Initialize(i2c::Port_5);
+
+        /* Reboot. */
+        pmic::ShutdownSystem(true);
+    }
+
     void PerformUserRebootToRcm() {
         /* Configure the bootrom to boot to rcm. */
         reg::Write(PMC + APBDEV_PMC_SCRATCH0, 0x2);
@@ -84,12 +95,34 @@ namespace ams::secmon {
         PerformPmcReboot();
     }
 
-    void PerformUserShutDown() {
-        /* Load our reboot stub to iram. */
-        LoadRebootStub(RebootStubAction_ShutDown);
+    void PerformUserRebootToFatalError() {
+        if (fuse::GetSocType() == fuse::SocType_Erista) {
+            /* On Erista, we reboot to fatal error by jumping to fusee primary's handler. */
+            return PerformUserRebootToPayload();
+        } else /* if (fuse::GetSocType() == fuse::SocType_Mariko) */ {
+            /* Call the fatal error handler. */
+            HandleMarikoFatalErrorInterrupt();
 
-        /* Reboot. */
-        PerformPmcReboot();
+            /* We should never get to this point. */
+            AMS_ABORT("Returned from Mariko Fatal handler?\n");
+        }
+    }
+
+    void PerformUserShutDown() {
+        if (fuse::GetSocType() == fuse::SocType_Mariko) {
+            /* Ensure that i2c-5 is usable for communicating with the pmic. */
+            clkrst::EnableI2c5Clock();
+            i2c::Initialize(i2c::Port_5);
+
+            /* On Mariko shutdown via pmic. */
+            pmic::ShutdownSystem(false);
+        } else /* if (fuse::GetSocType() == fuse::SocType_Erista) */ {
+            /* Load our reboot stub to iram. */
+            LoadRebootStub(RebootStubAction_ShutDown);
+
+            /* Reboot. */
+            PerformPmcReboot();
+        }
     }
 
 }

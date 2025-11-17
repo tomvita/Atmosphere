@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -20,10 +20,12 @@
 #include "erpt_srv_reporter.hpp"
 #include "erpt_srv_journal.hpp"
 #include "erpt_srv_service.hpp"
+#include "erpt_srv_forced_shutdown.hpp"
 
 namespace ams::erpt::srv {
 
-    lmem::HeapHandle g_heap_handle;
+    constinit lmem::HeapHandle g_heap_handle;
+    constinit ams::sf::ExpHeapAllocator g_sf_allocator = {};
 
     namespace {
 
@@ -31,6 +33,8 @@ namespace ams::erpt::srv {
         constexpr                  u32 SystemSaveDataFlags       = fs::SaveDataFlags_KeepAfterResettingSystemSaveDataWithoutUserSaveData;
         constexpr                  s64 SystemSaveDataSize        = 11_MB;
         constexpr                  s64 SystemSaveDataJournalSize = 2720_KB;
+
+        constinit bool g_automatic_report_cleanup_enabled = true;
 
         Result ExtendSystemSaveData() {
             s64 cur_journal_size;
@@ -45,15 +49,15 @@ namespace ams::erpt::srv {
                 }
             }
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         Result MountSystemSaveData() {
             fs::DisableAutoSaveDataCreation();
 
             /* Extend the system save data. */
-            /* NOTE: Nintendo does not check result of this. */
-            ExtendSystemSaveData();
+            /* NOTE: Nintendo used to not check the result of this; they do now, but . */
+            static_cast<void>(ExtendSystemSaveData());
 
             R_TRY_CATCH(fs::MountSystemSaveData(ReportStoragePath, SystemSaveDataId)) {
                 R_CATCH(fs::ResultTargetNotFound) {
@@ -62,7 +66,7 @@ namespace ams::erpt::srv {
                 }
             } R_END_TRY_CATCH;
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
     }
@@ -73,59 +77,103 @@ namespace ams::erpt::srv {
         g_heap_handle = lmem::CreateExpHeap(mem, mem_size, lmem::CreateOption_ThreadSafe);
         AMS_ABORT_UNLESS(g_heap_handle != nullptr);
 
+        fs::InitializeForSystem();
         fs::SetAllocator(Allocate, DeallocateWithSize);
+        fs::SetEnabledAutoAbort(false);
 
         R_ABORT_UNLESS(fs::MountSdCardErrorReportDirectoryForAtmosphere(ReportOnSdStoragePath));
 
+        if (g_automatic_report_cleanup_enabled) {
+            constexpr s64 MinimumReportCountForCleanup = 1000;
+            s64 report_count = MinimumReportCountForCleanup;
+
+            fs::DirectoryHandle dir;
+            if (R_SUCCEEDED(fs::OpenDirectory(std::addressof(dir), ReportOnSdStorageRootDirectoryPath, fs::OpenDirectoryMode_All))) {
+                ON_SCOPE_EXIT { fs::CloseDirectory(dir); };
+
+                if (R_FAILED(fs::GetDirectoryEntryCount(std::addressof(report_count), dir))) {
+                    report_count = MinimumReportCountForCleanup;
+                }
+            }
+
+            if (report_count >= MinimumReportCountForCleanup) {
+                static_cast<void>(fs::CleanDirectoryRecursively(ReportOnSdStorageRootDirectoryPath));
+            }
+        }
+
         R_ABORT_UNLESS(MountSystemSaveData());
 
-        for (auto i = 0; i < CategoryId_Count; i++) {
-            Context *ctx = new Context(static_cast<CategoryId>(i), 1);
+        g_sf_allocator.Attach(g_heap_handle);
+
+        for (const auto category_id : CategoryIndexToCategoryIdMap) {
+            Context *ctx = new Context(category_id);
             AMS_ABORT_UNLESS(ctx != nullptr);
         }
 
-        Journal::Restore();
+        if (R_FAILED(Journal::Restore())) {
+            /* TODO: Nintendo deletes system savedata when this fails. Should we?. */
+        }
 
-        return ResultSuccess();
+        Reporter::UpdatePowerOnTime();
+        Reporter::UpdateAwakeTime();
+
+        R_SUCCEED();
     }
 
     Result InitializeAndStartService() {
-        return InitializeService();
+        /* Initialize forced shutdown detection. */
+        /* NOTE: Nintendo does not check error code here. */
+        InitializeForcedShutdownDetection();
+
+        R_RETURN(InitializeService());
     }
 
     Result SetSerialNumberAndOsVersion(const char *sn, u32 sn_len, const char *os, u32 os_len, const char *os_priv, u32 os_priv_len) {
-        return Reporter::SetSerialNumberAndOsVersion(sn, sn_len, os, os_len, os_priv, os_priv_len);
+        R_RETURN(Reporter::SetSerialNumberAndOsVersion(sn, sn_len, os, os_len, os_priv, os_priv_len));
     }
 
     Result SetProductModel(const char *model, u32 model_len) {
         /* NOTE: Nintendo does not check that this allocation succeeds. */
-        auto *record = new ContextRecord(CategoryId_ProductModelInfo);
+        auto record = std::make_unique<ContextRecord>(CategoryId_ProductModelInfo);
         R_UNLESS(record != nullptr, erpt::ResultOutOfMemory());
 
         R_TRY(record->Add(FieldId_ProductModel, model, model_len));
-        R_TRY(Context::SubmitContextRecord(record));
+        R_TRY(Context::SubmitContextRecord(std::move(record)));
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result SetRegionSetting(const char *region, u32 region_len) {
         /* NOTE: Nintendo does not check that this allocation succeeds. */
-        auto *record = new ContextRecord(CategoryId_RegionSettingInfo);
+        auto record = std::make_unique<ContextRecord>(CategoryId_RegionSettingInfo);
         R_UNLESS(record != nullptr, erpt::ResultOutOfMemory());
 
         R_TRY(record->Add(FieldId_RegionSetting, region, region_len));
-        R_TRY(Context::SubmitContextRecord(record));
+        R_TRY(Context::SubmitContextRecord(std::move(record)));
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result SetRedirectNewReportsToSdCard(bool redirect) {
         Reporter::SetRedirectNewReportsToSdCard(redirect);
-        return ResultSuccess();
+        R_SUCCEED();
+    }
+
+    Result SetEnabledAutomaticReportCleanup(bool en) {
+        g_automatic_report_cleanup_enabled = en;
+        R_SUCCEED();
     }
 
     void Wait() {
-        return WaitService();
+        /* Get the update event. */
+        os::Event *event = GetForcedShutdownUpdateEvent();
+
+        /* Forever wait, saving any updates. */
+        while (true) {
+            event->Wait();
+            event->Clear();
+            SaveForcedShutdownContext();
+        }
     }
 
 

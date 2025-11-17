@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,6 +19,7 @@
 
 namespace ams::fs {
 
+    /* ACCURATE_TO_VERSION: Unknown */
     struct QueryRangeInfo {
         s32 aes_ctr_key_type;
         s32 speed_emulation_type;
@@ -38,7 +39,10 @@ namespace ams::fs {
 
     static_assert(util::is_pod<QueryRangeInfo>::value);
     static_assert(sizeof(QueryRangeInfo) == 0x40);
+
+    #if defined(ATMOSPHERE_OS_HORIZON)
     static_assert(sizeof(QueryRangeInfo) == sizeof(::FsRangeInfo));
+    #endif
 
     using FileQueryRangeInfo    = QueryRangeInfo;
     using StorageQueryRangeInfo = QueryRangeInfo;

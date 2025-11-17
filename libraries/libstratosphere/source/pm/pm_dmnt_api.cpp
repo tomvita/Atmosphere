@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,42 +15,55 @@
  */
 #include <stratosphere.hpp>
 
-#include "pm_ams.h"
+#include "pm_ams.os.horizon.h"
 
 namespace ams::pm::dmnt {
 
     /* Debug Monitor API. */
+    #if defined(ATMOSPHERE_OS_HORIZON)
     Result StartProcess(os::ProcessId process_id) {
-        return pmdmntStartProcess(static_cast<u64>(process_id));
+        R_RETURN(pmdmntStartProcess(static_cast<u64>(process_id)));
+    }
+
+    Result GetProgramId(ncm::ProgramId *out_program_id, os::ProcessId process_id) {
+        R_RETURN(pmdmntGetProgramId(reinterpret_cast<u64 *>(out_program_id), static_cast<u64>(process_id)));
     }
 
     Result GetProcessId(os::ProcessId *out_process_id, const ncm::ProgramId program_id) {
-        return pmdmntGetProcessId(reinterpret_cast<u64 *>(out_process_id), static_cast<u64>(program_id));
+        R_RETURN(pmdmntGetProcessId(reinterpret_cast<u64 *>(out_process_id), static_cast<u64>(program_id)));
     }
 
     Result GetApplicationProcessId(os::ProcessId *out_process_id) {
-        return pmdmntGetApplicationProcessId(reinterpret_cast<u64 *>(out_process_id));
+        R_RETURN(pmdmntGetApplicationProcessId(reinterpret_cast<u64 *>(out_process_id)));
     }
 
-    Result HookToCreateApplicationProcess(Handle *out_handle) {
+    Result HookToCreateApplicationProcess(os::NativeHandle *out_handle) {
         Event evt;
-        R_TRY(pmdmntHookToCreateApplicationProcess(&evt));
+        R_TRY(pmdmntHookToCreateApplicationProcess(std::addressof(evt)));
         *out_handle = evt.revent;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
-    Result AtmosphereGetProcessInfo(Handle *out_handle, ncm::ProgramLocation *out_loc, cfg::OverrideStatus *out_status, os::ProcessId process_id) {
-        *out_handle = INVALID_HANDLE;
+    Result HookToCreateProcess(os::NativeHandle *out_handle, const ncm::ProgramId program_id) {
+        Event evt;
+        R_TRY(pmdmntHookToCreateProcess(std::addressof(evt), static_cast<u64>(program_id)));
+        *out_handle = evt.revent;
+        R_SUCCEED();
+    }
+
+    Result AtmosphereGetProcessInfo(os::NativeHandle *out_handle, ncm::ProgramLocation *out_loc, cfg::OverrideStatus *out_status, os::ProcessId process_id) {
+        *out_handle = os::InvalidNativeHandle;
         *out_loc = {};
         *out_status = {};
         static_assert(sizeof(*out_status) == sizeof(CfgOverrideStatus));
-        return pmdmntAtmosphereGetProcessInfo(out_handle, reinterpret_cast<NcmProgramLocation *>(out_loc), reinterpret_cast<CfgOverrideStatus *>(out_status), static_cast<u64>(process_id));
+        R_RETURN(pmdmntAtmosphereGetProcessInfo(out_handle, reinterpret_cast<NcmProgramLocation *>(out_loc), reinterpret_cast<CfgOverrideStatus *>(out_status), static_cast<u64>(process_id)));
     }
 
-    Result AtmosphereGetCurrentLimitInfo(u64 *out_current_value, u64 *out_limit_value, ResourceLimitGroup group, LimitableResource resource) {
+    Result AtmosphereGetCurrentLimitInfo(u64 *out_current_value, u64 *out_limit_value, ResourceLimitGroup group, svc::LimitableResource resource) {
         *out_current_value = 0;
         *out_limit_value   = 0;
-        return pmdmntAtmosphereGetCurrentLimitInfo(out_current_value, out_limit_value, group, resource);
+        R_RETURN(pmdmntAtmosphereGetCurrentLimitInfo(out_current_value, out_limit_value, group, resource));
     }
+    #endif
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2019 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -16,9 +16,10 @@
 #pragma once
 #include <vapours/results/results_common.hpp>
 
-namespace ams::capsrv {
 
-    R_DEFINE_NAMESPACE_RESULT_MODULE(206);
+R_DEFINE_NAMESPACE_RESULT_MODULE(ams::capsrv, 206);
+
+namespace ams::capsrv {
 
     R_DEFINE_ERROR_RANGE(AlbumError, 2, 99);
         R_DEFINE_ERROR_RESULT(AlbumWorkMemoryError,                     3);
@@ -53,6 +54,7 @@ namespace ams::capsrv {
 
     R_DEFINE_ERROR_RANGE(InternalError, 1024, 2047);
         R_DEFINE_ERROR_RESULT(InternalJpegEncoderError,         1210);
+        R_DEFINE_ERROR_RESULT(InternalJpegOutBufferShortage,    1211);
         R_DEFINE_ERROR_RESULT(InternalJpegWorkMemoryShortage,   1212);
 
         R_DEFINE_ERROR_RANGE(InternalFileDataVerificationError, 1300, 1399);

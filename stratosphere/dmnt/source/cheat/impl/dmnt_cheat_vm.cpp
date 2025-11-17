@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -21,12 +21,12 @@ namespace ams::dmnt::cheat::impl {
 
     void CheatVirtualMachine::DebugLog(u32 log_id, u64 value) {
         /* Just unconditionally try to create the log folder. */
-        fs::EnsureDirectoryRecursively("sdmc:/atmosphere/cheat_vm_logs");
+        fs::EnsureDirectory("sdmc:/atmosphere/cheat_vm_logs");
 
         fs::FileHandle log_file;
         {
             char log_path[fs::EntryNameLengthMax + 1];
-            std::snprintf(log_path, sizeof(log_path), "sdmc:/atmosphere/cheat_vm_logs/%08x.log", log_id);
+            util::SNPrintf(log_path, sizeof(log_path), "sdmc:/atmosphere/cheat_vm_logs/%08x.log", log_id);
             if (R_FAILED(fs::OpenFile(std::addressof(log_file), log_path, fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
                 return;
             }
@@ -39,48 +39,54 @@ namespace ams::dmnt::cheat::impl {
         }
 
         char log_value[18];
-        std::snprintf(log_value, sizeof(log_value), "%016lx\n", value);
+        util::SNPrintf(log_value, sizeof(log_value), "%016lx\n", value);
         fs::WriteFile(log_file, log_offset, log_value, std::strlen(log_value), fs::WriteOption::Flush);
     }
 
     void CheatVirtualMachine::OpenDebugLogFile() {
         #ifdef DMNT_CHEAT_VM_DEBUG_LOG
         CloseDebugLogFile();
-        R_ABORT_UNLESS(fs::OpenFile(std::addressof(this->debug_log_file), "sdmc:/atmosphere/cheat_vm_logs/debug_log.txt"));
-        this->debug_log_file_offset = 0;
+        fs::EnsureDirectory("sdmc:/atmosphere/cheat_vm_logs");
+        fs::CreateFile("sdmc:/atmosphere/cheat_vm_logs/debug_log.txt", 0);
+        R_ABORT_UNLESS(fs::OpenFile(std::addressof(m_debug_log_file), "sdmc:/atmosphere/cheat_vm_logs/debug_log.txt", fs::OpenMode_Write | fs::OpenMode_AllowAppend));
+        m_debug_log_file_offset = 0;
+        m_has_debug_log_file = true;
         #endif
     }
 
     void CheatVirtualMachine::CloseDebugLogFile() {
         #ifdef DMNT_CHEAT_VM_DEBUG_LOG
-        if (this->has_debug_log_file) {
-            fs::CloseFile(this->debug_log_file);
+        if (m_has_debug_log_file) {
+            fs::CloseFile(m_debug_log_file);
         }
-        this->has_debug_log_file = false;
+        m_has_debug_log_file = false;
         #endif
     }
 
     void CheatVirtualMachine::LogToDebugFile(const char *format, ...) {
         #ifdef DMNT_CHEAT_VM_DEBUG_LOG
-        if (!this->has_debug_log_file) {
+        if (!m_has_debug_log_file) {
             return;
         }
 
         {
             std::va_list vl;
             va_start(vl, format);
-            std::vsnprintf(this->debug_log_format_buf, sizeof(this->debug_log_format_buf) - 1, format, vl);
+            util::VSNPrintf(m_debug_log_format_buf, sizeof(m_debug_log_format_buf) - 1, format, vl);
             va_end(vl);
         }
 
-        size_t fmt_len = std::strlen(this->debug_log_format_buf);
-        if (this->debug_log_format_buf[fmt_len - 1] != '\n') {
-            this->debug_log_format_buf[fmt_len + 0] = '\n';
-            this->debug_log_format_buf[fmt_len + 1] = '\x00';
+        size_t fmt_len = std::strlen(m_debug_log_format_buf);
+        if (m_debug_log_format_buf[fmt_len - 1] != '\n') {
+            m_debug_log_format_buf[fmt_len + 0] = '\n';
+            m_debug_log_format_buf[fmt_len + 1] = '\x00';
             fmt_len += 1;
         }
 
-        fs::WriteFile(this->debug_log_file, this->debug_log_offset, this->debug_log_format_buf, fmt_len, fs::WriteOption::Flush);
+        fs::WriteFile(m_debug_log_file, m_debug_log_file_offset, m_debug_log_format_buf, fmt_len, fs::WriteOption::Flush);
+        m_debug_log_file_offset += fmt_len;
+        #else
+        AMS_UNUSED(format);
         #endif
     }
 
@@ -102,6 +108,8 @@ namespace ams::dmnt::cheat::impl {
                 this->LogToDebugFile("Bit Width: %x\n", opcode->begin_cond.bit_width);
                 this->LogToDebugFile("Mem Type:  %x\n", opcode->begin_cond.mem_type);
                 this->LogToDebugFile("Cond Type: %x\n", opcode->begin_cond.cond_type);
+                this->LogToDebugFile("Inc Ofs reg:   %d\n", opcode->begin_cond.include_ofs_reg);
+                this->LogToDebugFile("Ofs Reg Idx: %x\n", opcode->begin_cond.ofs_reg_index);
                 this->LogToDebugFile("Rel Addr:  %lx\n", opcode->begin_cond.rel_address);
                 this->LogToDebugFile("Value:     %lx\n", opcode->begin_cond.value.bit64);
                 break;
@@ -151,6 +159,11 @@ namespace ams::dmnt::cheat::impl {
             case CheatVmOpcodeType_BeginKeypressConditionalBlock:
                 this->LogToDebugFile("Opcode: Begin Keypress Conditional\n");
                 this->LogToDebugFile("Key Mask:  %x\n", opcode->begin_keypress_cond.key_mask);
+                break;
+            case CheatVmOpcodeType_BeginExtendedKeypressConditionalBlock:
+                this->LogToDebugFile("Opcode: Begin Extended Keypress Conditional\n");
+                this->LogToDebugFile("Key Mask:  %x\n", opcode->begin_ext_keypress_cond.key_mask);
+                this->LogToDebugFile("Auto Repeat:  %d\n", opcode->begin_ext_keypress_cond.auto_repeat);
                 break;
             case CheatVmOpcodeType_PerformArithmeticRegister:
                 this->LogToDebugFile("Opcode: Perform Register Arithmetic\n");
@@ -284,6 +297,7 @@ namespace ams::dmnt::cheat::impl {
                         this->LogToDebugFile("O Reg Idx: %x\n", opcode->debug_log.ofs_reg_index);
                         break;
                 }
+                break;
             default:
                 this->LogToDebugFile("Unknown opcode: %x\n", opcode->opcode);
                 break;
@@ -292,10 +306,10 @@ namespace ams::dmnt::cheat::impl {
 
     bool CheatVirtualMachine::DecodeNextOpcode(CheatVmOpcode *out) {
         /* If we've ever seen a decode failure, return false. */
-        bool valid = this->decode_success;
+        bool valid = m_decode_success;
         CheatVmOpcode opcode = {};
         ON_SCOPE_EXIT {
-            this->decode_success &= valid;
+            m_decode_success &= valid;
             if (valid) {
                 *out = opcode;
             }
@@ -303,11 +317,11 @@ namespace ams::dmnt::cheat::impl {
 
         /* Helper function for getting instruction dwords. */
         auto GetNextDword = [&]() {
-            if (this->instruction_ptr >= this->num_opcodes) {
+            if (m_instruction_ptr >= m_num_opcodes) {
                 valid = false;
                 return static_cast<u32>(0);
             }
-            return this->program[this->instruction_ptr++];
+            return m_program[m_instruction_ptr++];
         };
 
         /* Helper function for parsing a VmInt. */
@@ -351,6 +365,7 @@ namespace ams::dmnt::cheat::impl {
         switch (opcode.opcode) {
             case CheatVmOpcodeType_BeginConditionalBlock:
             case CheatVmOpcodeType_BeginKeypressConditionalBlock:
+            case CheatVmOpcodeType_BeginExtendedKeypressConditionalBlock:
             case CheatVmOpcodeType_BeginRegisterConditionalBlock:
                 opcode.begin_conditional_block = true;
                 break;
@@ -380,14 +395,16 @@ namespace ams::dmnt::cheat::impl {
                     opcode.begin_cond.bit_width = (first_dword >> 24) & 0xF;
                     opcode.begin_cond.mem_type = (MemoryAccessType)((first_dword >> 20) & 0xF);
                     opcode.begin_cond.cond_type = (ConditionalComparisonType)((first_dword >> 16) & 0xF);
+                    opcode.begin_cond.include_ofs_reg = ((first_dword >> 12) & 0xF) != 0;
+                    opcode.begin_cond.ofs_reg_index = ((first_dword >> 8) & 0xF);
                     opcode.begin_cond.rel_address = ((u64)(first_dword & 0xFF) << 32ul) | ((u64)second_dword);
-                    opcode.begin_cond.value = GetNextVmInt(opcode.store_static.bit_width);
+                    opcode.begin_cond.value = GetNextVmInt(opcode.begin_cond.bit_width);
                 }
                 break;
             case CheatVmOpcodeType_EndConditionalBlock:
                 {
-                    /* 20000000 */
-                    /* There's actually nothing left to process here! */
+                    /* 2X000000 */
+                    opcode.end_cond.is_else = ((first_dword >> 24) & 0xF) == 1;
                 }
                 break;
             case CheatVmOpcodeType_ControlLoop:
@@ -396,7 +413,7 @@ namespace ams::dmnt::cheat::impl {
                     /* 310R0000 */
                     /* Parse register, whether loop start or loop end. */
                     opcode.ctrl_loop.start_loop = ((first_dword >> 24) & 0xF) == 0;
-                    opcode.ctrl_loop.reg_index = ((first_dword >> 20) & 0xF);
+                    opcode.ctrl_loop.reg_index = ((first_dword >> 16) & 0xF);
 
                     /* Read number of iters if loop start. */
                     if (opcode.ctrl_loop.start_loop) {
@@ -420,7 +437,8 @@ namespace ams::dmnt::cheat::impl {
                     opcode.ldr_memory.bit_width = (first_dword >> 24) & 0xF;
                     opcode.ldr_memory.mem_type = (MemoryAccessType)((first_dword >> 20) & 0xF);
                     opcode.ldr_memory.reg_index = ((first_dword >> 16) & 0xF);
-                    opcode.ldr_memory.load_from_reg = ((first_dword >> 12) & 0xF) != 0;
+                    opcode.ldr_memory.load_from_reg = ((first_dword >> 12) & 0xF);
+                    opcode.ldr_memory.offset_register = ((first_dword >> 8) & 0xF);
                     opcode.ldr_memory.rel_address = ((u64)(first_dword & 0xFF) << 32ul) | ((u64)second_dword);
                 }
                 break;
@@ -451,6 +469,14 @@ namespace ams::dmnt::cheat::impl {
                     /* 8kkkkkkk */
                     /* Just parse the mask. */
                     opcode.begin_keypress_cond.key_mask = first_dword & 0x0FFFFFFF;
+                }
+                break;
+            case CheatVmOpcodeType_BeginExtendedKeypressConditionalBlock:
+                {
+                    /* C4r00000 kkkkkkkk kkkkkkkk */
+                    /* Read additional words. */
+                    opcode.begin_ext_keypress_cond.key_mask = (u64)GetNextDword() << 32ul | (u64)GetNextDword();
+                    opcode.begin_ext_keypress_cond.auto_repeat = ((first_dword >> 20) & 0xF) != 0;
                 }
                 break;
             case CheatVmOpcodeType_PerformArithmeticRegister:
@@ -667,13 +693,13 @@ namespace ams::dmnt::cheat::impl {
         return valid;
     }
 
-    void CheatVirtualMachine::SkipConditionalBlock() {
-        if (this->condition_depth > 0) {
+    void CheatVirtualMachine::SkipConditionalBlock(bool is_if) {
+        if (m_condition_depth > 0) {
             /* We want to continue until we're out of the current block. */
-            const size_t desired_depth = this->condition_depth - 1;
+            const size_t desired_depth = m_condition_depth - 1;
 
             CheatVmOpcode skip_opcode;
-            while (this->condition_depth > desired_depth && this->DecodeNextOpcode(&skip_opcode)) {
+            while (m_condition_depth > desired_depth && this->DecodeNextOpcode(std::addressof(skip_opcode))) {
                 /* Decode instructions until we see end of the current conditional block. */
                 /* NOTE: This is broken in gateway's implementation. */
                 /* Gateway currently checks for "0x2" instead of "0x20000000" */
@@ -682,17 +708,20 @@ namespace ams::dmnt::cheat::impl {
 
                 /* We also support nesting of conditional blocks, and Gateway does not. */
                 if (skip_opcode.begin_conditional_block) {
-                    this->condition_depth++;
+                    m_condition_depth++;
                 } else if (skip_opcode.opcode == CheatVmOpcodeType_EndConditionalBlock) {
-                    this->condition_depth--;
+                    if (!skip_opcode.end_cond.is_else) {
+                        m_condition_depth--;
+                    } else if (is_if && m_condition_depth - 1 == desired_depth) {
+                        /* An if will continue to an else at the same depth. */
+                        break;
+                    }
                 }
             }
         } else {
-            /* Skipping, but this->condition_depth = 0. */
+            /* Skipping, but m_condition_depth = 0. */
             /* This is an error condition. */
-            /* However, I don't actually believe it is possible for this to happen. */
-            /* I guess we'll throw a fatal error here, so as to encourage me to fix the VM */
-            /* in the event that someone triggers it? I don't know how you'd do that. */
+            /* This could occur with a mismatched "else" opcode, for example. */
             R_ABORT_UNLESS(ResultVirtualMachineInvalidConditionDepth());
         }
     }
@@ -720,34 +749,40 @@ namespace ams::dmnt::cheat::impl {
                 return metadata->main_nso_extents.base + rel_address;
             case MemoryAccessType_Heap:
                 return metadata->heap_extents.base + rel_address;
+            case MemoryAccessType_Alias:
+                return metadata->alias_extents.base + rel_address;
+            case MemoryAccessType_Aslr:
+                return metadata->aslr_extents.base + rel_address;
+            case MemoryAccessType_NonRelative:
+                return rel_address;
         }
     }
 
     void CheatVirtualMachine::ResetState() {
         for (size_t i = 0; i < CheatVirtualMachine::NumRegisters; i++) {
-            this->registers[i] = 0;
-            this->saved_values[i] = 0;
-            this->loop_tops[i] = 0;
+            m_registers[i] = 0;
+            m_saved_values[i] = 0;
+            m_loop_tops[i] = 0;
         }
-        this->instruction_ptr = 0;
-        this->condition_depth = 0;
-        this->decode_success = true;
+        m_instruction_ptr = 0;
+        m_condition_depth = 0;
+        m_decode_success = true;
     }
 
     bool CheatVirtualMachine::LoadProgram(const CheatEntry *cheats, size_t num_cheats) {
         /* Reset opcode count. */
-        this->num_opcodes = 0;
+        m_num_opcodes = 0;
 
         for (size_t i = 0; i < num_cheats; i++) {
             if (cheats[i].enabled) {
                 /* Bounds check. */
-                if (cheats[i].definition.num_opcodes + this->num_opcodes > MaximumProgramOpcodeCount) {
-                    this->num_opcodes = 0;
+                if (cheats[i].definition.num_opcodes + m_num_opcodes > MaximumProgramOpcodeCount) {
+                    m_num_opcodes = 0;
                     return false;
                 }
 
                 for (size_t n = 0; n < cheats[i].definition.num_opcodes; n++) {
-                    this->program[this->num_opcodes++] = cheats[i].definition.opcodes[n];
+                    m_program[m_num_opcodes++] = cheats[i].definition.opcodes[n];
                 }
             }
         }
@@ -755,12 +790,13 @@ namespace ams::dmnt::cheat::impl {
         return true;
     }
 
+    static u64 s_keyold = 0;
     void CheatVirtualMachine::Execute(const CheatProcessMetadata *metadata) {
         CheatVmOpcode cur_opcode;
         u64 kHeld = 0;
 
         /* Get Keys held. */
-        hid::GetKeysHeld(&kHeld);
+        hid::GetKeysHeld(std::addressof(kHeld));
 
         this->OpenDebugLogFile();
         ON_SCOPE_EXIT { this->CloseDebugLogFile(); };
@@ -774,35 +810,35 @@ namespace ams::dmnt::cheat::impl {
         this->ResetState();
 
         /* Loop until program finishes. */
-        while (this->DecodeNextOpcode(&cur_opcode)) {
-            this->LogToDebugFile("Instruction Ptr: %04x\n", (u32)this->instruction_ptr);
+        while (this->DecodeNextOpcode(std::addressof(cur_opcode))) {
+            this->LogToDebugFile("Instruction Ptr: %04x\n", (u32)m_instruction_ptr);
 
             for (size_t i = 0; i < NumRegisters; i++) {
-                this->LogToDebugFile("Registers[%02x]: %016lx\n", i, this->registers[i]);
+                this->LogToDebugFile("Registers[%02x]: %016lx\n", i, m_registers[i]);
             }
 
             for (size_t i = 0; i < NumRegisters; i++) {
-                this->LogToDebugFile("SavedRegs[%02x]: %016lx\n", i, this->saved_values[i]);
+                this->LogToDebugFile("SavedRegs[%02x]: %016lx\n", i, m_saved_values[i]);
             }
-            this->LogOpcode(&cur_opcode);
+            this->LogOpcode(std::addressof(cur_opcode));
 
             /* Increment conditional depth, if relevant. */
             if (cur_opcode.begin_conditional_block) {
-                this->condition_depth++;
+                m_condition_depth++;
             }
 
             switch (cur_opcode.opcode) {
                 case CheatVmOpcodeType_StoreStatic:
                     {
                         /* Calculate address, write value to memory. */
-                        u64 dst_address = GetCheatProcessAddress(metadata, cur_opcode.store_static.mem_type, cur_opcode.store_static.rel_address + this->registers[cur_opcode.store_static.offset_register]);
+                        u64 dst_address = GetCheatProcessAddress(metadata, cur_opcode.store_static.mem_type, cur_opcode.store_static.rel_address + m_registers[cur_opcode.store_static.offset_register]);
                         u64 dst_value = GetVmInt(cur_opcode.store_static.value, cur_opcode.store_static.bit_width);
                         switch (cur_opcode.store_static.bit_width) {
                             case 1:
                             case 2:
                             case 4:
                             case 8:
-                                dmnt::cheat::impl::WriteCheatProcessMemoryUnsafe(dst_address, &dst_value, cur_opcode.store_static.bit_width);
+                                dmnt::cheat::impl::WriteCheatProcessMemoryUnsafe(dst_address, std::addressof(dst_value), cur_opcode.store_static.bit_width);
                                 break;
                         }
                     }
@@ -810,14 +846,14 @@ namespace ams::dmnt::cheat::impl {
                 case CheatVmOpcodeType_BeginConditionalBlock:
                     {
                         /* Read value from memory. */
-                        u64 src_address = GetCheatProcessAddress(metadata, cur_opcode.begin_cond.mem_type, cur_opcode.begin_cond.rel_address);
+                        u64 src_address = GetCheatProcessAddress(metadata, cur_opcode.begin_cond.mem_type, (cur_opcode.begin_cond.include_ofs_reg) ? m_registers[cur_opcode.begin_cond.ofs_reg_index] + cur_opcode.begin_cond.rel_address : cur_opcode.begin_cond.rel_address);
                         u64 src_value = 0;
                         switch (cur_opcode.store_static.bit_width) {
                             case 1:
                             case 2:
                             case 4:
                             case 8:
-                                dmnt::cheat::impl::ReadCheatProcessMemoryUnsafe(src_address, &src_value, cur_opcode.begin_cond.bit_width);
+                                dmnt::cheat::impl::ReadCheatProcessMemoryUnsafe(src_address, std::addressof(src_value), cur_opcode.begin_cond.bit_width);
                                 break;
                         }
                         /* Check against condition. */
@@ -845,40 +881,49 @@ namespace ams::dmnt::cheat::impl {
                         }
                         /* Skip conditional block if condition not met. */
                         if (!cond_met) {
-                            this->SkipConditionalBlock();
+                            this->SkipConditionalBlock(true);
                         }
                     }
                     break;
                 case CheatVmOpcodeType_EndConditionalBlock:
-                    /* Decrement the condition depth. */
-                    /* We will assume, graciously, that mismatched conditional block ends are a nop. */
-                    if (this->condition_depth > 0) {
-                        this->condition_depth--;
+                    if (cur_opcode.end_cond.is_else) {
+                        /* Skip to the end of the conditional block. */
+                        this->SkipConditionalBlock(false);
+                    } else {
+                        /* Decrement the condition depth. */
+                        /* We will assume, graciously, that mismatched conditional block ends are a nop. */
+                        if (m_condition_depth > 0) {
+                            m_condition_depth--;
+                        }
                     }
                     break;
                 case CheatVmOpcodeType_ControlLoop:
                     if (cur_opcode.ctrl_loop.start_loop) {
                         /* Start a loop. */
-                        this->registers[cur_opcode.ctrl_loop.reg_index] = cur_opcode.ctrl_loop.num_iters;
-                        this->loop_tops[cur_opcode.ctrl_loop.reg_index] = this->instruction_ptr;
+                        m_registers[cur_opcode.ctrl_loop.reg_index] = cur_opcode.ctrl_loop.num_iters;
+                        m_loop_tops[cur_opcode.ctrl_loop.reg_index] = m_instruction_ptr;
                     } else {
                         /* End a loop. */
-                        this->registers[cur_opcode.ctrl_loop.reg_index]--;
-                        if (this->registers[cur_opcode.ctrl_loop.reg_index] != 0) {
-                            this->instruction_ptr = this->loop_tops[cur_opcode.ctrl_loop.reg_index];
+                        m_registers[cur_opcode.ctrl_loop.reg_index]--;
+                        if (m_registers[cur_opcode.ctrl_loop.reg_index] != 0) {
+                            m_instruction_ptr = m_loop_tops[cur_opcode.ctrl_loop.reg_index];
                         }
                     }
                     break;
                 case CheatVmOpcodeType_LoadRegisterStatic:
                     /* Set a register to a static value. */
-                    this->registers[cur_opcode.ldr_static.reg_index] = cur_opcode.ldr_static.value;
+                    m_registers[cur_opcode.ldr_static.reg_index] = cur_opcode.ldr_static.value;
                     break;
                 case CheatVmOpcodeType_LoadRegisterMemory:
                     {
                         /* Choose source address. */
                         u64 src_address;
-                        if (cur_opcode.ldr_memory.load_from_reg) {
-                            src_address = this->registers[cur_opcode.ldr_memory.reg_index] + cur_opcode.ldr_memory.rel_address;
+                        if (cur_opcode.ldr_memory.load_from_reg == 1) {
+                            src_address = m_registers[cur_opcode.ldr_memory.reg_index] + cur_opcode.ldr_memory.rel_address;
+                        } else if (cur_opcode.ldr_memory.load_from_reg == 2) {
+                            src_address = m_registers[cur_opcode.ldr_memory.offset_register] + cur_opcode.ldr_memory.rel_address;
+                        } else if (cur_opcode.ldr_memory.load_from_reg == 3) {
+                            src_address = GetCheatProcessAddress(metadata, cur_opcode.ldr_memory.mem_type, m_registers[cur_opcode.ldr_memory.offset_register] + cur_opcode.ldr_memory.rel_address);
                         } else {
                             src_address = GetCheatProcessAddress(metadata, cur_opcode.ldr_memory.mem_type, cur_opcode.ldr_memory.rel_address);
                         }
@@ -888,7 +933,7 @@ namespace ams::dmnt::cheat::impl {
                             case 2:
                             case 4:
                             case 8:
-                                dmnt::cheat::impl::ReadCheatProcessMemoryUnsafe(src_address, &this->registers[cur_opcode.ldr_memory.reg_index], cur_opcode.ldr_memory.bit_width);
+                                dmnt::cheat::impl::ReadCheatProcessMemoryUnsafe(src_address, std::addressof(m_registers[cur_opcode.ldr_memory.reg_index]), cur_opcode.ldr_memory.bit_width);
                                 break;
                         }
                     }
@@ -896,10 +941,10 @@ namespace ams::dmnt::cheat::impl {
                 case CheatVmOpcodeType_StoreStaticToAddress:
                     {
                         /* Calculate address. */
-                        u64 dst_address = this->registers[cur_opcode.str_static.reg_index];
+                        u64 dst_address = m_registers[cur_opcode.str_static.reg_index];
                         u64 dst_value = cur_opcode.str_static.value;
                         if (cur_opcode.str_static.add_offset_reg) {
-                            dst_address += this->registers[cur_opcode.str_static.offset_reg_index];
+                            dst_address += m_registers[cur_opcode.str_static.offset_reg_index];
                         }
                         /* Write value to memory. Gateway only writes on valid bitwidth. */
                         switch (cur_opcode.str_static.bit_width) {
@@ -907,12 +952,12 @@ namespace ams::dmnt::cheat::impl {
                             case 2:
                             case 4:
                             case 8:
-                                dmnt::cheat::impl::WriteCheatProcessMemoryUnsafe(dst_address, &dst_value, cur_opcode.str_static.bit_width);
+                                dmnt::cheat::impl::WriteCheatProcessMemoryUnsafe(dst_address, std::addressof(dst_value), cur_opcode.str_static.bit_width);
                                 break;
                         }
                         /* Increment register if relevant. */
                         if (cur_opcode.str_static.increment_reg) {
-                            this->registers[cur_opcode.str_static.reg_index] += cur_opcode.str_static.bit_width;
+                            m_registers[cur_opcode.str_static.reg_index] += cur_opcode.str_static.bit_width;
                         }
                     }
                     break;
@@ -921,19 +966,19 @@ namespace ams::dmnt::cheat::impl {
                         /* Do requested math. */
                         switch (cur_opcode.perform_math_static.math_type) {
                             case RegisterArithmeticType_Addition:
-                                this->registers[cur_opcode.perform_math_static.reg_index] +=  (u64)cur_opcode.perform_math_static.value;
+                                m_registers[cur_opcode.perform_math_static.reg_index] +=  (u64)cur_opcode.perform_math_static.value;
                                 break;
                             case RegisterArithmeticType_Subtraction:
-                                this->registers[cur_opcode.perform_math_static.reg_index] -=  (u64)cur_opcode.perform_math_static.value;
+                                m_registers[cur_opcode.perform_math_static.reg_index] -=  (u64)cur_opcode.perform_math_static.value;
                                 break;
                             case RegisterArithmeticType_Multiplication:
-                                this->registers[cur_opcode.perform_math_static.reg_index] *=  (u64)cur_opcode.perform_math_static.value;
+                                m_registers[cur_opcode.perform_math_static.reg_index] *=  (u64)cur_opcode.perform_math_static.value;
                                 break;
                             case RegisterArithmeticType_LeftShift:
-                                this->registers[cur_opcode.perform_math_static.reg_index] <<= (u64)cur_opcode.perform_math_static.value;
+                                m_registers[cur_opcode.perform_math_static.reg_index] <<= (u64)cur_opcode.perform_math_static.value;
                                 break;
                             case RegisterArithmeticType_RightShift:
-                                this->registers[cur_opcode.perform_math_static.reg_index] >>= (u64)cur_opcode.perform_math_static.value;
+                                m_registers[cur_opcode.perform_math_static.reg_index] >>= (u64)cur_opcode.perform_math_static.value;
                                 break;
                             default:
                                 /* Do not handle extensions here. */
@@ -942,16 +987,16 @@ namespace ams::dmnt::cheat::impl {
                         /* Apply bit width. */
                         switch (cur_opcode.perform_math_static.bit_width) {
                             case 1:
-                                this->registers[cur_opcode.perform_math_static.reg_index] = static_cast<u8>(this->registers[cur_opcode.perform_math_static.reg_index]);
+                                m_registers[cur_opcode.perform_math_static.reg_index] = static_cast<u8>(m_registers[cur_opcode.perform_math_static.reg_index]);
                                 break;
                             case 2:
-                                this->registers[cur_opcode.perform_math_static.reg_index] = static_cast<u16>(this->registers[cur_opcode.perform_math_static.reg_index]);
+                                m_registers[cur_opcode.perform_math_static.reg_index] = static_cast<u16>(m_registers[cur_opcode.perform_math_static.reg_index]);
                                 break;
                             case 4:
-                                this->registers[cur_opcode.perform_math_static.reg_index] = static_cast<u32>(this->registers[cur_opcode.perform_math_static.reg_index]);
+                                m_registers[cur_opcode.perform_math_static.reg_index] = static_cast<u32>(m_registers[cur_opcode.perform_math_static.reg_index]);
                                 break;
                             case 8:
-                                this->registers[cur_opcode.perform_math_static.reg_index] = static_cast<u64>(this->registers[cur_opcode.perform_math_static.reg_index]);
+                                m_registers[cur_opcode.perform_math_static.reg_index] = static_cast<u64>(m_registers[cur_opcode.perform_math_static.reg_index]);
                                 break;
                         }
                     }
@@ -960,15 +1005,27 @@ namespace ams::dmnt::cheat::impl {
                     /* Check for keypress. */
                     if ((cur_opcode.begin_keypress_cond.key_mask & kHeld) != cur_opcode.begin_keypress_cond.key_mask) {
                         /* Keys not pressed. Skip conditional block. */
-                        this->SkipConditionalBlock();
+                        this->SkipConditionalBlock(true);
+                    }
+                    break;
+                case CheatVmOpcodeType_BeginExtendedKeypressConditionalBlock:
+                    /* Check for keypress. */
+                    if (!cur_opcode.begin_ext_keypress_cond.auto_repeat) {
+                        if ((cur_opcode.begin_ext_keypress_cond.key_mask & kHeld) != (cur_opcode.begin_ext_keypress_cond.key_mask) || (cur_opcode.begin_ext_keypress_cond.key_mask & s_keyold) == (cur_opcode.begin_ext_keypress_cond.key_mask)) {
+                            /* Keys not pressed. Skip conditional block. */
+                            this->SkipConditionalBlock(true);
+                        }
+                    } else if ((cur_opcode.begin_ext_keypress_cond.key_mask & kHeld) != cur_opcode.begin_ext_keypress_cond.key_mask) {
+                        /* Keys not pressed. Skip conditional block. */
+                        this->SkipConditionalBlock(true);
                     }
                     break;
                 case CheatVmOpcodeType_PerformArithmeticRegister:
                     {
-                        const u64 operand_1_value = this->registers[cur_opcode.perform_math_reg.src_reg_1_index];
+                        const u64 operand_1_value = m_registers[cur_opcode.perform_math_reg.src_reg_1_index];
                         const u64 operand_2_value = cur_opcode.perform_math_reg.has_immediate ?
                                                     GetVmInt(cur_opcode.perform_math_reg.value, cur_opcode.perform_math_reg.bit_width) :
-                                                    this->registers[cur_opcode.perform_math_reg.src_reg_2_index];
+                                                    m_registers[cur_opcode.perform_math_reg.src_reg_2_index];
 
                         u64 res_val = 0;
                         /* Do requested math. */
@@ -1003,6 +1060,34 @@ namespace ams::dmnt::cheat::impl {
                             case RegisterArithmeticType_None:
                                 res_val = operand_1_value;
                                 break;
+                            case RegisterArithmeticType_FloatAddition:
+                                if (cur_opcode.perform_math_reg.bit_width == 4) {
+                                    res_val = std::bit_cast<std::uint32_t>(std::bit_cast<float>(static_cast<uint32_t>(operand_1_value)) + std::bit_cast<float>(static_cast<uint32_t>(operand_2_value)));
+                                } else if (cur_opcode.perform_math_reg.bit_width == 8) {
+                                    res_val = std::bit_cast<std::uint64_t>(std::bit_cast<double>(operand_1_value) + std::bit_cast<double>(operand_2_value));
+                                }
+                                break;
+                            case RegisterArithmeticType_FloatSubtraction:
+                                if (cur_opcode.perform_math_reg.bit_width == 4) {
+                                    res_val = std::bit_cast<std::uint32_t>(std::bit_cast<float>(static_cast<uint32_t>(operand_1_value)) - std::bit_cast<float>(static_cast<uint32_t>(operand_2_value)));
+                                } else if (cur_opcode.perform_math_reg.bit_width == 8) {
+                                    res_val = std::bit_cast<std::uint64_t>(std::bit_cast<double>(operand_1_value) - std::bit_cast<double>(operand_2_value));
+                                }
+                                break;
+                            case RegisterArithmeticType_FloatMultiplication:
+                                if (cur_opcode.perform_math_reg.bit_width == 4) {
+                                    res_val = std::bit_cast<std::uint32_t>(std::bit_cast<float>(static_cast<uint32_t>(operand_1_value)) * std::bit_cast<float>(static_cast<uint32_t>(operand_2_value)));
+                                } else if (cur_opcode.perform_math_reg.bit_width == 8) {
+                                    res_val = std::bit_cast<std::uint64_t>(std::bit_cast<double>(operand_1_value) * std::bit_cast<double>(operand_2_value));
+                                }
+                                break;
+                            case RegisterArithmeticType_FloatDivision:
+                                if (cur_opcode.perform_math_reg.bit_width == 4) {
+                                    res_val = std::bit_cast<std::uint32_t>(std::bit_cast<float>(static_cast<uint32_t>(operand_1_value)) / std::bit_cast<float>(static_cast<uint32_t>(operand_2_value)));
+                                } else if (cur_opcode.perform_math_reg.bit_width == 8) {
+                                    res_val = std::bit_cast<std::uint64_t>(std::bit_cast<double>(operand_1_value) / std::bit_cast<double>(operand_2_value));
+                                }
+                                break;
                         }
 
 
@@ -1023,32 +1108,32 @@ namespace ams::dmnt::cheat::impl {
                         }
 
                         /* Save to register. */
-                        this->registers[cur_opcode.perform_math_reg.dst_reg_index] = res_val;
+                        m_registers[cur_opcode.perform_math_reg.dst_reg_index] = res_val;
                     }
                     break;
                 case CheatVmOpcodeType_StoreRegisterToAddress:
                     {
                         /* Calculate address. */
-                        u64 dst_value   = this->registers[cur_opcode.str_register.str_reg_index];
-                        u64 dst_address = this->registers[cur_opcode.str_register.addr_reg_index];
+                        u64 dst_value   = m_registers[cur_opcode.str_register.str_reg_index];
+                        u64 dst_address = m_registers[cur_opcode.str_register.addr_reg_index];
                         switch (cur_opcode.str_register.ofs_type) {
                             case StoreRegisterOffsetType_None:
                                 /* Nothing more to do */
                                 break;
                             case StoreRegisterOffsetType_Reg:
-                                dst_address += this->registers[cur_opcode.str_register.ofs_reg_index];
+                                dst_address += m_registers[cur_opcode.str_register.ofs_reg_index];
                                 break;
                             case StoreRegisterOffsetType_Imm:
                                 dst_address += cur_opcode.str_register.rel_address;
                                 break;
                             case StoreRegisterOffsetType_MemReg:
-                                dst_address = GetCheatProcessAddress(metadata, cur_opcode.str_register.mem_type, this->registers[cur_opcode.str_register.addr_reg_index]);
+                                dst_address = GetCheatProcessAddress(metadata, cur_opcode.str_register.mem_type, m_registers[cur_opcode.str_register.addr_reg_index]);
                                 break;
                             case StoreRegisterOffsetType_MemImm:
                                 dst_address = GetCheatProcessAddress(metadata, cur_opcode.str_register.mem_type, cur_opcode.str_register.rel_address);
                                 break;
                             case StoreRegisterOffsetType_MemImmReg:
-                                dst_address = GetCheatProcessAddress(metadata, cur_opcode.str_register.mem_type, this->registers[cur_opcode.str_register.addr_reg_index] + cur_opcode.str_register.rel_address);
+                                dst_address = GetCheatProcessAddress(metadata, cur_opcode.str_register.mem_type, m_registers[cur_opcode.str_register.addr_reg_index] + cur_opcode.str_register.rel_address);
                                 break;
                         }
 
@@ -1058,13 +1143,13 @@ namespace ams::dmnt::cheat::impl {
                             case 2:
                             case 4:
                             case 8:
-                                dmnt::cheat::impl::WriteCheatProcessMemoryUnsafe(dst_address, &dst_value, cur_opcode.str_register.bit_width);
+                                dmnt::cheat::impl::WriteCheatProcessMemoryUnsafe(dst_address, std::addressof(dst_value), cur_opcode.str_register.bit_width);
                                 break;
                         }
 
                         /* Increment register if relevant. */
                         if (cur_opcode.str_register.increment_reg) {
-                            this->registers[cur_opcode.str_register.addr_reg_index] += cur_opcode.str_register.bit_width;
+                            m_registers[cur_opcode.str_register.addr_reg_index] += cur_opcode.str_register.bit_width;
                         }
                     }
                     break;
@@ -1074,16 +1159,16 @@ namespace ams::dmnt::cheat::impl {
                         u64 src_value = 0;
                         switch (cur_opcode.begin_reg_cond.bit_width) {
                             case 1:
-                                src_value = static_cast<u8>(this->registers[cur_opcode.begin_reg_cond.val_reg_index]  & 0xFFul);
+                                src_value = static_cast<u8>(m_registers[cur_opcode.begin_reg_cond.val_reg_index]  & 0xFFul);
                                 break;
                             case 2:
-                                src_value = static_cast<u16>(this->registers[cur_opcode.begin_reg_cond.val_reg_index] & 0xFFFFul);
+                                src_value = static_cast<u16>(m_registers[cur_opcode.begin_reg_cond.val_reg_index] & 0xFFFFul);
                                 break;
                             case 4:
-                                src_value = static_cast<u32>(this->registers[cur_opcode.begin_reg_cond.val_reg_index] & 0xFFFFFFFFul);
+                                src_value = static_cast<u32>(m_registers[cur_opcode.begin_reg_cond.val_reg_index] & 0xFFFFFFFFul);
                                 break;
                             case 8:
-                                src_value = static_cast<u64>(this->registers[cur_opcode.begin_reg_cond.val_reg_index] & 0xFFFFFFFFFFFFFFFFul);
+                                src_value = static_cast<u64>(m_registers[cur_opcode.begin_reg_cond.val_reg_index] & 0xFFFFFFFFFFFFFFFFul);
                                 break;
                         }
 
@@ -1094,16 +1179,16 @@ namespace ams::dmnt::cheat::impl {
                         } else if (cur_opcode.begin_reg_cond.comp_type == CompareRegisterValueType_OtherRegister) {
                             switch (cur_opcode.begin_reg_cond.bit_width) {
                                 case 1:
-                                    cond_value = static_cast<u8>(this->registers[cur_opcode.begin_reg_cond.other_reg_index]  & 0xFFul);
+                                    cond_value = static_cast<u8>(m_registers[cur_opcode.begin_reg_cond.other_reg_index]  & 0xFFul);
                                     break;
                                 case 2:
-                                    cond_value = static_cast<u16>(this->registers[cur_opcode.begin_reg_cond.other_reg_index] & 0xFFFFul);
+                                    cond_value = static_cast<u16>(m_registers[cur_opcode.begin_reg_cond.other_reg_index] & 0xFFFFul);
                                     break;
                                 case 4:
-                                    cond_value = static_cast<u32>(this->registers[cur_opcode.begin_reg_cond.other_reg_index] & 0xFFFFFFFFul);
+                                    cond_value = static_cast<u32>(m_registers[cur_opcode.begin_reg_cond.other_reg_index] & 0xFFFFFFFFul);
                                     break;
                                 case 8:
-                                    cond_value = static_cast<u64>(this->registers[cur_opcode.begin_reg_cond.other_reg_index] & 0xFFFFFFFFFFFFFFFFul);
+                                    cond_value = static_cast<u64>(m_registers[cur_opcode.begin_reg_cond.other_reg_index] & 0xFFFFFFFFFFFFFFFFul);
                                     break;
                             }
                         } else {
@@ -1113,13 +1198,13 @@ namespace ams::dmnt::cheat::impl {
                                     cond_address = GetCheatProcessAddress(metadata, cur_opcode.begin_reg_cond.mem_type, cur_opcode.begin_reg_cond.rel_address);
                                     break;
                                 case CompareRegisterValueType_MemoryOfsReg:
-                                    cond_address = GetCheatProcessAddress(metadata, cur_opcode.begin_reg_cond.mem_type, this->registers[cur_opcode.begin_reg_cond.ofs_reg_index]);
+                                    cond_address = GetCheatProcessAddress(metadata, cur_opcode.begin_reg_cond.mem_type, m_registers[cur_opcode.begin_reg_cond.ofs_reg_index]);
                                     break;
                                 case CompareRegisterValueType_RegisterRelAddr:
-                                    cond_address = this->registers[cur_opcode.begin_reg_cond.addr_reg_index] + cur_opcode.begin_reg_cond.rel_address;
+                                    cond_address = m_registers[cur_opcode.begin_reg_cond.addr_reg_index] + cur_opcode.begin_reg_cond.rel_address;
                                     break;
                                 case CompareRegisterValueType_RegisterOfsReg:
-                                    cond_address = this->registers[cur_opcode.begin_reg_cond.addr_reg_index] + this->registers[cur_opcode.begin_reg_cond.ofs_reg_index];
+                                    cond_address = m_registers[cur_opcode.begin_reg_cond.addr_reg_index] + m_registers[cur_opcode.begin_reg_cond.ofs_reg_index];
                                     break;
                                 default:
                                     break;
@@ -1129,7 +1214,7 @@ namespace ams::dmnt::cheat::impl {
                                 case 2:
                                 case 4:
                                 case 8:
-                                    dmnt::cheat::impl::ReadCheatProcessMemoryUnsafe(cond_address, &cond_value, cur_opcode.begin_reg_cond.bit_width);
+                                    dmnt::cheat::impl::ReadCheatProcessMemoryUnsafe(cond_address, std::addressof(cond_value), cur_opcode.begin_reg_cond.bit_width);
                                     break;
                             }
                         }
@@ -1159,7 +1244,7 @@ namespace ams::dmnt::cheat::impl {
 
                         /* Skip conditional block if condition not met. */
                         if (!cond_met) {
-                            this->SkipConditionalBlock();
+                            this->SkipConditionalBlock(true);
                         }
                     }
                     break;
@@ -1167,17 +1252,17 @@ namespace ams::dmnt::cheat::impl {
                     /* Save or restore a register. */
                     switch (cur_opcode.save_restore_reg.op_type) {
                         case SaveRestoreRegisterOpType_ClearRegs:
-                            this->registers[cur_opcode.save_restore_reg.dst_index] = 0ul;
+                            m_registers[cur_opcode.save_restore_reg.dst_index] = 0ul;
                             break;
                         case SaveRestoreRegisterOpType_ClearSaved:
-                            this->saved_values[cur_opcode.save_restore_reg.dst_index] = 0ul;
+                            m_saved_values[cur_opcode.save_restore_reg.dst_index] = 0ul;
                             break;
                         case SaveRestoreRegisterOpType_Save:
-                            this->saved_values[cur_opcode.save_restore_reg.dst_index] = this->registers[cur_opcode.save_restore_reg.src_index];
+                            m_saved_values[cur_opcode.save_restore_reg.dst_index] = m_registers[cur_opcode.save_restore_reg.src_index];
                             break;
                         case SaveRestoreRegisterOpType_Restore:
                         default:
-                            this->registers[cur_opcode.save_restore_reg.dst_index] = this->saved_values[cur_opcode.save_restore_reg.src_index];
+                            m_registers[cur_opcode.save_restore_reg.dst_index] = m_saved_values[cur_opcode.save_restore_reg.src_index];
                             break;
                     }
                     break;
@@ -1188,14 +1273,14 @@ namespace ams::dmnt::cheat::impl {
                     switch (cur_opcode.save_restore_regmask.op_type) {
                         case SaveRestoreRegisterOpType_ClearSaved:
                         case SaveRestoreRegisterOpType_Save:
-                            src = this->registers;
-                            dst = this->saved_values;
+                            src = m_registers;
+                            dst = m_saved_values;
                             break;
                         case SaveRestoreRegisterOpType_ClearRegs:
                         case SaveRestoreRegisterOpType_Restore:
                         default:
-                            src = this->saved_values;
-                            dst = this->registers;
+                            src = m_saved_values;
+                            dst = m_registers;
                             break;
                     }
                     for (size_t i = 0; i < NumRegisters; i++) {
@@ -1217,10 +1302,10 @@ namespace ams::dmnt::cheat::impl {
                 case CheatVmOpcodeType_ReadWriteStaticRegister:
                     if (cur_opcode.rw_static_reg.static_idx < NumReadableStaticRegisters) {
                         /* Load a register with a static register. */
-                        this->registers[cur_opcode.rw_static_reg.idx] = this->static_registers[cur_opcode.rw_static_reg.static_idx];
+                        m_registers[cur_opcode.rw_static_reg.idx] = m_static_registers[cur_opcode.rw_static_reg.static_idx];
                     } else {
                         /* Store a register to a static register. */
-                        this->static_registers[cur_opcode.rw_static_reg.static_idx] = this->registers[cur_opcode.rw_static_reg.idx];
+                        m_static_registers[cur_opcode.rw_static_reg.static_idx] = m_registers[cur_opcode.rw_static_reg.idx];
                     }
                     break;
                 case CheatVmOpcodeType_PauseProcess:
@@ -1236,16 +1321,16 @@ namespace ams::dmnt::cheat::impl {
                         if (cur_opcode.debug_log.val_type == DebugLogValueType_RegisterValue) {
                             switch (cur_opcode.debug_log.bit_width) {
                                 case 1:
-                                    log_value = static_cast<u8>(this->registers[cur_opcode.debug_log.val_reg_index]  & 0xFFul);
+                                    log_value = static_cast<u8>(m_registers[cur_opcode.debug_log.val_reg_index]  & 0xFFul);
                                     break;
                                 case 2:
-                                    log_value = static_cast<u16>(this->registers[cur_opcode.debug_log.val_reg_index] & 0xFFFFul);
+                                    log_value = static_cast<u16>(m_registers[cur_opcode.debug_log.val_reg_index] & 0xFFFFul);
                                     break;
                                 case 4:
-                                    log_value = static_cast<u32>(this->registers[cur_opcode.debug_log.val_reg_index] & 0xFFFFFFFFul);
+                                    log_value = static_cast<u32>(m_registers[cur_opcode.debug_log.val_reg_index] & 0xFFFFFFFFul);
                                     break;
                                 case 8:
-                                    log_value = static_cast<u64>(this->registers[cur_opcode.debug_log.val_reg_index] & 0xFFFFFFFFFFFFFFFFul);
+                                    log_value = static_cast<u64>(m_registers[cur_opcode.debug_log.val_reg_index] & 0xFFFFFFFFFFFFFFFFul);
                                     break;
                             }
                         } else {
@@ -1255,13 +1340,13 @@ namespace ams::dmnt::cheat::impl {
                                     val_address = GetCheatProcessAddress(metadata, cur_opcode.debug_log.mem_type, cur_opcode.debug_log.rel_address);
                                     break;
                                 case DebugLogValueType_MemoryOfsReg:
-                                    val_address = GetCheatProcessAddress(metadata, cur_opcode.debug_log.mem_type, this->registers[cur_opcode.debug_log.ofs_reg_index]);
+                                    val_address = GetCheatProcessAddress(metadata, cur_opcode.debug_log.mem_type, m_registers[cur_opcode.debug_log.ofs_reg_index]);
                                     break;
                                 case DebugLogValueType_RegisterRelAddr:
-                                    val_address = this->registers[cur_opcode.debug_log.addr_reg_index] + cur_opcode.debug_log.rel_address;
+                                    val_address = m_registers[cur_opcode.debug_log.addr_reg_index] + cur_opcode.debug_log.rel_address;
                                     break;
                                 case DebugLogValueType_RegisterOfsReg:
-                                    val_address = this->registers[cur_opcode.debug_log.addr_reg_index] + this->registers[cur_opcode.debug_log.ofs_reg_index];
+                                    val_address = m_registers[cur_opcode.debug_log.addr_reg_index] + m_registers[cur_opcode.debug_log.ofs_reg_index];
                                     break;
                                 default:
                                     break;
@@ -1271,7 +1356,7 @@ namespace ams::dmnt::cheat::impl {
                                 case 2:
                                 case 4:
                                 case 8:
-                                    dmnt::cheat::impl::ReadCheatProcessMemoryUnsafe(val_address, &log_value, cur_opcode.debug_log.bit_width);
+                                    dmnt::cheat::impl::ReadCheatProcessMemoryUnsafe(val_address, std::addressof(log_value), cur_opcode.debug_log.bit_width);
                                     break;
                             }
                         }
@@ -1285,6 +1370,7 @@ namespace ams::dmnt::cheat::impl {
                     break;
             }
         }
+        s_keyold = kHeld;
     }
 
 }

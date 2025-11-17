@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -31,14 +31,18 @@ namespace ams::fs {
 
             R_TRY(accessor->GetFileTimeStampRaw(out, sub_path));
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
     }
 
-    Result GetFileTimeStampRawForDebug(FileTimeStampRaw *out, const char *path) {
-        AMS_FS_R_TRY(GetFileTimeStampRawForDebug(out, path));
-        return ResultSuccess();
+    Result GetFileTimeStamp(FileTimeStamp *out, const char *path) {
+        fs::FileTimeStampRaw raw;
+        AMS_FS_R_TRY(impl::GetFileTimeStampRawForDebug(std::addressof(raw), path));
+
+        static_assert(sizeof(raw) == sizeof(*out));
+        std::memcpy(out, std::addressof(raw), sizeof(raw));
+        R_SUCCEED();
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,23 +15,31 @@
  */
 #include <exosphere.hpp>
 #include "secmon_loader_uncompress.hpp"
-#include "program_lz4.h"
-#include "boot_code_lz4.h"
 
 namespace ams::secmon::loader {
 
+    namespace {
+
+        constexpr const u8 SecmonProgramLz4[] = {
+            #embed <program.lz4>
+        };
+
+        constexpr const u8 SecmonBootCodeLz4[] = {
+            #embed <boot_code.lz4>
+        };
+
+    }
+
     NORETURN void UncompressAndExecute() {
         /* Uncompress the program image. */
-        Uncompress(secmon::MemoryRegionPhysicalTzramFullProgramImage.GetPointer(), secmon::MemoryRegionPhysicalTzramFullProgramImage.GetSize(), program_lz4, program_lz4_size);
-
+        Uncompress(secmon::MemoryRegionPhysicalTzramFullProgramImage.GetPointer(), secmon::MemoryRegionPhysicalTzramFullProgramImage.GetSize(), SecmonProgramLz4, sizeof(SecmonProgramLz4));
 
         /* Copy the boot image to the end of IRAM */
-        u8 *relocated_boot_code = secmon::MemoryRegionPhysicalIramBootCodeImage.GetEndPointer<u8>() - boot_code_lz4_size;
-        std::memcpy(relocated_boot_code, boot_code_lz4, boot_code_lz4_size);
+        u8 *relocated_boot_code = secmon::MemoryRegionPhysicalIramBootCodeImage.GetEndPointer<u8>() - sizeof(SecmonBootCodeLz4);
+        std::memcpy(relocated_boot_code, SecmonBootCodeLz4, sizeof(SecmonBootCodeLz4));
 
         /* Uncompress the boot image. */
-        Uncompress(secmon::MemoryRegionPhysicalIramBootCodeImage.GetPointer(), secmon::MemoryRegionPhysicalIramBootCodeImage.GetSize(), relocated_boot_code, boot_code_lz4_size);
-
+        Uncompress(secmon::MemoryRegionPhysicalIramBootCodeImage.GetPointer(), secmon::MemoryRegionPhysicalIramBootCodeImage.GetSize(), relocated_boot_code, sizeof(SecmonBootCodeLz4));
 
         /* Jump to the boot image. */
         reinterpret_cast<void (*)()>(secmon::MemoryRegionPhysicalIramBootCodeImage.GetAddress())();

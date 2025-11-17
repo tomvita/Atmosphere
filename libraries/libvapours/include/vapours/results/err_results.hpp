@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,11 +17,13 @@
 #pragma once
 #include <vapours/results/results_common.hpp>
 
+R_DEFINE_NAMESPACE_RESULT_MODULE(ams::err, 162);
+
 namespace ams::err {
 
-    R_DEFINE_NAMESPACE_RESULT_MODULE(162);
+    R_DEFINE_ERROR_RESULT(ApplicationAbort,       1);
+    R_DEFINE_ERROR_RESULT(SystemProgramAbort,     2);
 
-    R_DEFINE_ERROR_RESULT(ApplicationAborted,  1);
-    R_DEFINE_ERROR_RESULT(SystemModuleAborted, 2);
+    R_DEFINE_ERROR_RESULT(ForcedShutdownDetected, 4);
 
 }

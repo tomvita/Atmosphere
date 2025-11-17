@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -16,6 +16,9 @@
 
 #pragma once
 
+/* Unconditionally include type-traits as first header. */
+#include <type_traits>
+
 /* C headers. */
 #include <cstdint>
 #include <cstdarg>
@@ -28,7 +31,6 @@
 #include <cinttypes>
 
 /* C++ headers. */
-#include <type_traits>
 #include <concepts>
 #include <algorithm>
 #include <iterator>
@@ -36,15 +38,15 @@
 #include <random>
 #include <atomic>
 #include <utility>
-#include <optional>
 #include <functional>
 #include <tuple>
 #include <array>
 #include <bit>
 #include <span>
 
-/* Stratosphere wants additional libstdc++ headers, others do not. */
-#ifdef ATMOSPHERE_IS_STRATOSPHERE
+/* Stratosphere/Troposphere want additional libstdc++ headers and libnx,
+ * others do not. */
+#if defined(ATMOSPHERE_IS_STRATOSPHERE) || defined(ATMOSPHERE_IS_TROPOSPHERE)
 
 #include <memory>
 #include <mutex>
@@ -53,15 +55,24 @@
 #include <unordered_map>
 #include <set>
 
+#if defined(ATMOSPHERE_OS_HORIZON) && defined(ATMOSPHERE_BOARD_NINTENDO_NX)
+
 /* Libnx. */
 #include <switch.h>
+
+#else
+
+/* Non-switch code can't include libnx. */
+#include "types.hpp"
+
+#endif
 
 #else
 
 /* Non-EL0 code can't include libnx. */
 #include "types.hpp"
 
-#endif /* ATMOSPHERE_IS_STRATOSPHERE */
+#endif /* defined(ATMOSPHERE_IS_STRATOSPHERE) || defined(ATMOSPHERE_IS_TROPOSPHERE) */
 
 /* Atmosphere meta. */
 #include <vapours/ams_version.h>

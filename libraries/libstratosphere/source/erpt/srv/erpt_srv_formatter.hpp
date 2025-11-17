@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -37,20 +37,37 @@ namespace ams::erpt::srv {
             static ValueTypeTag GetTag(u32) { return ValueTypeTag::U32; }
             static ValueTypeTag GetTag(u64) { return ValueTypeTag::U64; }
 
+            static Result AddStringValue(Report *report, const char *str, u32 len) {
+                const u32 str_len = str != nullptr ? static_cast<u32>(strnlen(str, len)) : 0;
+
+                if (str_len < ElementSize_32) {
+                    R_TRY(report->Write(static_cast<u8>(static_cast<u8>(ValueTypeTag::FixStr) | str_len)));
+                } else if (str_len < ElementSize_256) {
+                    R_TRY(report->Write(static_cast<u8>(ValueTypeTag::Str8)));
+                    R_TRY(report->Write(static_cast<u8>(str_len)));
+                } else {
+                    R_UNLESS(str_len < ElementSize_16384, erpt::ResultFormatterError());
+                    R_TRY(report->Write(static_cast<u8>(ValueTypeTag::Str16)));
+
+                    u16 be_str_len;
+                    util::StoreBigEndian(std::addressof(be_str_len), static_cast<u16>(str_len));
+                    R_TRY(report->Write(be_str_len));
+                }
+
+                R_TRY(report->Write(str, str_len));
+
+                R_SUCCEED();
+            }
+
             static Result AddId(Report *report, FieldId field_id) {
                 static_assert(MaxFieldStringSize < ElementSize_256);
 
-                const u32 field_len = static_cast<u32>(strnlen(FieldString[field_id], MaxFieldStringSize));
-                if (field_len < ElementSize_32) {
-                    R_TRY(report->Write(static_cast<u8>(static_cast<u8>(ValueTypeTag::FixStr) | field_len)));
-                } else {
-                    R_TRY(report->Write(static_cast<u8>(ValueTypeTag::Str8)));
-                    R_TRY(report->Write(static_cast<u8>(field_len)));
-                }
+                const auto index = FindFieldIndex(field_id);
+                AMS_ASSERT(index.has_value());
 
-                R_TRY(report->Write(FieldString[field_id], field_len));
+                R_TRY(AddStringValue(report, FieldString[index.value()], strnlen(FieldString[index.value()], MaxFieldStringSize)));
 
-                return ResultSuccess();
+                R_SUCCEED();
             }
 
             template<typename T>
@@ -63,7 +80,7 @@ namespace ams::erpt::srv {
                 R_TRY(report->Write(tag));
                 R_TRY(report->Write(reinterpret_cast<u8 *>(std::addressof(big_endian_value)), sizeof(big_endian_value)));
 
-                return ResultSuccess();
+                R_SUCCEED();
             }
 
             template<typename T>
@@ -84,21 +101,21 @@ namespace ams::erpt::srv {
                     R_TRY(AddValue(report, arr[i]));
                 }
 
-                return ResultSuccess();
+                R_SUCCEED();
             }
 
             template<typename T>
             static Result AddIdValuePair(Report *report, FieldId field_id, T value) {
                 R_TRY(AddId(report, field_id));
                 R_TRY(AddValue(report, value));
-                return ResultSuccess();
+                R_SUCCEED();
             }
 
             template<typename T>
             static Result AddIdValueArray(Report *report, FieldId field_id, T *arr, u32 arr_size) {
                 R_TRY(AddId(report, field_id));
                 R_TRY(AddValueArray(report, arr, arr_size));
-                return ResultSuccess();
+                R_SUCCEED();
             }
         public:
             static Result Begin(Report *report, u32 record_count) {
@@ -114,51 +131,36 @@ namespace ams::erpt::srv {
                     R_TRY(report->Write(be_count));
                 }
 
-                return ResultSuccess();
+                R_SUCCEED();
             }
 
             static Result End(Report *report) {
-                return ResultSuccess();
+                AMS_UNUSED(report);
+                R_SUCCEED();
             }
 
             template<typename T>
             static Result AddField(Report *report, FieldId field_id, T value) {
-                return AddIdValuePair<T>(report, field_id, value);
+                R_RETURN(AddIdValuePair<T>(report, field_id, value));
             }
 
             template<typename T>
             static Result AddField(Report *report, FieldId field_id, T *arr, u32 arr_size) {
-                return AddIdValueArray(report, field_id, arr, arr_size);
+                R_RETURN(AddIdValueArray(report, field_id, arr, arr_size));
             }
 
             static Result AddField(Report *report, FieldId field_id, bool value) {
                 R_TRY(AddId(report, field_id));
                 R_TRY(report->Write(static_cast<u8>(value ? ValueTypeTag::True : ValueTypeTag::False)));
-                return ResultSuccess();
+                R_SUCCEED();
             }
 
             static Result AddField(Report *report, FieldId field_id, char *str, u32 len) {
                 R_TRY(AddId(report, field_id));
 
-                const u32 str_len = str != nullptr ? static_cast<u32>(strnlen(str, len)) : 0;
+                R_TRY(AddStringValue(report, str, len));
 
-                if (str_len < ElementSize_32) {
-                    R_TRY(report->Write(static_cast<u8>(static_cast<u8>(ValueTypeTag::FixStr) | str_len)));
-                } else if (str_len < ElementSize_256) {
-                    R_TRY(report->Write(static_cast<u8>(ValueTypeTag::Str8)));
-                    R_TRY(report->Write(static_cast<u8>(str_len)));
-                } else {
-                    R_UNLESS(str_len < ElementSize_16384, erpt::ResultFormatterError());
-                    R_TRY(report->Write(static_cast<u8>(ValueTypeTag::Str16)));
-
-                    u16 be_str_len;
-                    util::StoreBigEndian(std::addressof(be_str_len), static_cast<u16>(str_len));
-                    R_TRY(report->Write(be_str_len));
-                }
-
-                R_TRY(report->Write(str, str_len));
-
-                return ResultSuccess();
+                R_SUCCEED();
             }
 
             static Result AddField(Report *report, FieldId field_id, u8 *bin, u32 len) {
@@ -178,7 +180,7 @@ namespace ams::erpt::srv {
 
                 R_TRY(report->Write(bin, len));
 
-                return ResultSuccess();
+                R_SUCCEED();
             }
     };
 

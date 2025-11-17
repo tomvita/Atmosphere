@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -23,11 +23,11 @@ namespace ams::erpt::srv {
 
         using ManagerList = util::IntrusiveListBaseTraits<ManagerImpl>::ListType;
 
-        ManagerList g_manager_list;
+        constinit ManagerList g_manager_list;
 
     }
 
-    ManagerImpl::ManagerImpl() : system_event(os::EventClearMode_AutoClear, true) {
+    ManagerImpl::ManagerImpl() : m_system_event(os::EventClearMode_AutoClear, true) {
         g_manager_list.push_front(*this);
     }
 
@@ -36,36 +36,35 @@ namespace ams::erpt::srv {
     }
 
     void ManagerImpl::NotifyOne() {
-        this->system_event.Signal();
+        m_system_event.Signal();
     }
 
-    Result ManagerImpl::NotifyAll() {
+    void ManagerImpl::NotifyAll() {
         for (auto &manager : g_manager_list) {
             manager.NotifyOne();
         }
-        return ResultSuccess();
     }
 
     Result ManagerImpl::GetReportList(const ams::sf::OutBuffer &out_list, ReportType type_filter) {
         R_UNLESS(out_list.GetSize() == sizeof(ReportList), erpt::ResultInvalidArgument());
 
-        return Journal::GetReportList(reinterpret_cast<ReportList *>(out_list.GetPointer()), type_filter);
+        R_RETURN(Journal::GetReportList(reinterpret_cast<ReportList *>(out_list.GetPointer()), type_filter));
     }
 
     Result ManagerImpl::GetEvent(ams::sf::OutCopyHandle out) {
-        out.SetValue(this->system_event.GetReadableHandle());
-        return ResultSuccess();
+        out.SetValue(m_system_event.GetReadableHandle(), false);
+        R_SUCCEED();
     }
 
     Result ManagerImpl::CleanupReports() {
         Journal::CleanupReports();
         Journal::CleanupAttachments();
-        return Journal::Commit();
+        R_RETURN(Journal::Commit());
     }
 
     Result ManagerImpl::DeleteReport(const ReportId &report_id) {
         R_TRY(Journal::Delete(report_id));
-        return Journal::Commit();
+        R_RETURN(Journal::Commit());
     }
 
     Result ManagerImpl::GetStorageUsageStatistics(ams::sf::Out<StorageUsageStatistics> out) {
@@ -83,13 +82,26 @@ namespace ams::erpt::srv {
         }
 
         out.SetValue(stats);
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
-    Result ManagerImpl::GetAttachmentList(const ams::sf::OutBuffer &out_list, const ReportId &report_id) {
+    Result ManagerImpl::GetAttachmentListDeprecated(const ams::sf::OutBuffer &out_list, const ReportId &report_id) {
         R_UNLESS(out_list.GetSize() == sizeof(AttachmentList), erpt::ResultInvalidArgument());
 
-        return Journal::GetAttachmentList(reinterpret_cast<AttachmentList *>(out_list.GetPointer()), report_id);
+        auto *attachment_list = reinterpret_cast<AttachmentList *>(out_list.GetPointer());
+
+        R_RETURN(Journal::GetAttachmentList(std::addressof(attachment_list->attachment_count), attachment_list->attachments, util::size(attachment_list->attachments), report_id));
+    }
+
+    Result ManagerImpl::GetAttachmentList(ams::sf::Out<u32> out_count, const ams::sf::OutBuffer &out_buf, const ReportId &report_id) {
+        R_RETURN(Journal::GetAttachmentList(out_count.GetPointer(), reinterpret_cast<AttachmentInfo *>(out_buf.GetPointer()), out_buf.GetSize() / sizeof(AttachmentInfo), report_id));
+    }
+
+    Result ManagerImpl::GetReportSizeMax(ams::sf::Out<u32> out) {
+        /* TODO: Where is this size defined? */
+        constexpr size_t ReportSizeMax = 0x3FF4F;
+        *out = ReportSizeMax;
+        R_SUCCEED();
     }
 
 }

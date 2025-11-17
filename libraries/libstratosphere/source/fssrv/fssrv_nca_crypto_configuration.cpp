@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -128,14 +128,26 @@ namespace ams::fssrv {
             /* Key Generation Function */
             nullptr,
 
+            /* Decrypt Aes Xts Eternal Function */
+            nullptr,
+
+            /* Encrypt Aes Xts Eternal Function */
+            nullptr,
+
             /* Decrypt Aes Ctr Function */
             nullptr,
 
             /* Decrypt Aes Ctr External Function */
             nullptr,
 
+            /* Verify Sign1 Function */
+            nullptr,
+
             /* Plaintext Header Available */
             false,
+
+            /* Software Key Available */
+            true,
         };
 
         constexpr inline const ::ams::fssystem::NcaCryptoConfiguration DefaultNcaCryptoConfigurationProd = {
@@ -169,14 +181,26 @@ namespace ams::fssrv {
             /* Key Generation Function */
             nullptr,
 
+            /* Decrypt Aes Xts Eternal Function */
+            nullptr,
+
+            /* Encrypt Aes Xts Eternal Function */
+            nullptr,
+
             /* Decrypt Aes Ctr Function */
             nullptr,
 
             /* Decrypt Aes Ctr External Function */
             nullptr,
 
+            /* Verify Sign1 Function */
+            nullptr,
+
             /* Plaintext Header Available */
             false,
+
+            /* Software Key Available */
+            true,
         };
 
     }

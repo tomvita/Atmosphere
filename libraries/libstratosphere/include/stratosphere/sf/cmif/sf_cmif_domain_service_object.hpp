@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,9 +15,10 @@
  */
 
 #pragma once
-#include "sf_cmif_service_dispatch.hpp"
-#include "sf_cmif_domain_api.hpp"
-#include "sf_cmif_server_message_processor.hpp"
+#include <stratosphere/sf/sf_mitm_config.hpp>
+#include <stratosphere/sf/cmif/sf_cmif_service_dispatch.hpp>
+#include <stratosphere/sf/cmif/sf_cmif_domain_api.hpp>
+#include <stratosphere/sf/cmif/sf_cmif_server_message_processor.hpp>
 
 namespace ams::sf::cmif {
 
@@ -33,58 +34,58 @@ namespace ams::sf::cmif {
 
     class DomainServiceObjectProcessor : public ServerMessageProcessor {
         private:
-            ServerMessageProcessor *impl_processor;
-            ServerDomainBase *domain;
-            DomainObjectId *in_object_ids;
-            DomainObjectId *out_object_ids;
-            size_t num_in_objects;
-            ServerMessageRuntimeMetadata impl_metadata;
+            ServerMessageProcessor *m_impl_processor;
+            ServerDomainBase *m_domain;
+            DomainObjectId *m_in_object_ids;
+            DomainObjectId *m_out_object_ids;
+            size_t m_num_in_objects;
+            ServerMessageRuntimeMetadata m_impl_metadata;
         public:
-            DomainServiceObjectProcessor(ServerDomainBase *d, DomainObjectId *in_obj_ids, size_t num_in_objs) : domain(d), in_object_ids(in_obj_ids), num_in_objects(num_in_objs) {
-                AMS_ABORT_UNLESS(this->domain != nullptr);
-                AMS_ABORT_UNLESS(this->in_object_ids != nullptr);
-                this->impl_processor = nullptr;
-                this->out_object_ids = nullptr;
-                this->impl_metadata = {};
+            DomainServiceObjectProcessor(ServerDomainBase *d, DomainObjectId *in_obj_ids, size_t num_in_objs) : m_domain(d), m_in_object_ids(in_obj_ids), m_num_in_objects(num_in_objs) {
+                AMS_ABORT_UNLESS(m_domain != nullptr);
+                AMS_ABORT_UNLESS(m_in_object_ids != nullptr);
+                m_impl_processor = nullptr;
+                m_out_object_ids = nullptr;
+                m_impl_metadata = {};
             }
 
             constexpr size_t GetInObjectCount() const {
-                return this->num_in_objects;
+                return m_num_in_objects;
             }
 
             constexpr size_t GetOutObjectCount() const {
-                return this->impl_metadata.GetOutObjectCount();
+                return m_impl_metadata.GetOutObjectCount();
             }
 
             constexpr size_t GetImplOutHeadersSize() const {
-                return this->impl_metadata.GetOutHeadersSize();
+                return m_impl_metadata.GetOutHeadersSize();
             }
 
             constexpr size_t GetImplOutDataTotalSize() const {
-                return this->impl_metadata.GetOutDataSize() + this->impl_metadata.GetOutHeadersSize();
+                return m_impl_metadata.GetUnalignedOutDataSize() + m_impl_metadata.GetOutHeadersSize();
             }
         public:
             /* Used to enabled templated message processors. */
             virtual void SetImplementationProcessor(ServerMessageProcessor *impl) override final {
-                if (this->impl_processor == nullptr) {
-                    this->impl_processor = impl;
+                if (m_impl_processor == nullptr) {
+                    m_impl_processor = impl;
                 } else {
-                    this->impl_processor->SetImplementationProcessor(impl);
+                    m_impl_processor->SetImplementationProcessor(impl);
                 }
 
-                this->impl_metadata = this->impl_processor->GetRuntimeMetadata();
+                m_impl_metadata = m_impl_processor->GetRuntimeMetadata();
             }
 
             virtual const ServerMessageRuntimeMetadata GetRuntimeMetadata() const override final {
-                const auto runtime_metadata = this->impl_processor->GetRuntimeMetadata();
+                const auto runtime_metadata = m_impl_processor->GetRuntimeMetadata();
 
                 return ServerMessageRuntimeMetadata {
-                    .in_data_size      = static_cast<u16>(runtime_metadata.GetInDataSize()  + runtime_metadata.GetInObjectCount() * sizeof(DomainObjectId)),
-                    .out_data_size     = static_cast<u16>(runtime_metadata.GetOutDataSize() + runtime_metadata.GetOutObjectCount() * sizeof(DomainObjectId)),
-                    .in_headers_size   = static_cast<u8>(runtime_metadata.GetInHeadersSize()  + sizeof(CmifDomainInHeader)),
-                    .out_headers_size  = static_cast<u8>(runtime_metadata.GetOutHeadersSize() + sizeof(CmifDomainOutHeader)),
-                    .in_object_count   = 0,
-                    .out_object_count  = 0,
+                    .in_data_size            = static_cast<u16>(runtime_metadata.GetInDataSize()  + runtime_metadata.GetInObjectCount() * sizeof(DomainObjectId)),
+                    .unaligned_out_data_size = static_cast<u16>(runtime_metadata.GetOutDataSize() + runtime_metadata.GetOutObjectCount() * sizeof(DomainObjectId)),
+                    .in_headers_size         = static_cast<u8>(runtime_metadata.GetInHeadersSize()  + sizeof(CmifDomainInHeader)),
+                    .out_headers_size        = static_cast<u8>(runtime_metadata.GetOutHeadersSize() + sizeof(CmifDomainOutHeader)),
+                    .in_object_count         = 0,
+                    .out_object_count        = 0,
                 };
             }
 
@@ -110,13 +111,15 @@ namespace ams::sf::cmif {
     template<>
     struct ServiceDispatchTraits<DomainServiceObject> {
         static_assert(std::is_base_of<sf::IServiceObject, DomainServiceObject>::value, "DomainServiceObject must derive from sf::IServiceObject");
+        #if AMS_SF_MITM_SUPPORTED
         static_assert(!std::is_base_of<sf::IMitmServiceObject, DomainServiceObject>::value, "DomainServiceObject must not derive from sf::IMitmServiceObject");
+        #endif
         using ProcessHandlerType = decltype(ServiceDispatchMeta::ProcessHandler);
 
         using DispatchTableType = DomainServiceObjectDispatchTable;
         static constexpr ProcessHandlerType ProcessHandlerImpl = &impl::ServiceDispatchTableBase::ProcessMessage<DispatchTableType>;
 
-        static constexpr inline ServiceDispatchMeta Meta{&DomainServiceObject::s_CmifServiceDispatchTable, ProcessHandlerImpl};
+        static constexpr inline ServiceDispatchMeta Meta{std::addressof(DomainServiceObject::s_CmifServiceDispatchTable), ProcessHandlerImpl};
     };
 
     template<>
@@ -127,7 +130,7 @@ namespace ams::sf::cmif {
         using DispatchTableType = DomainServiceObjectDispatchTable;
         static constexpr ProcessHandlerType ProcessHandlerImpl = &impl::ServiceDispatchTableBase::ProcessMessageForMitm<DispatchTableType>;
 
-        static constexpr inline ServiceDispatchMeta Meta{&DomainServiceObject::s_CmifServiceDispatchTable, ProcessHandlerImpl};
+        static constexpr inline ServiceDispatchMeta Meta{std::addressof(DomainServiceObject::s_CmifServiceDispatchTable), ProcessHandlerImpl};
     };
 
 

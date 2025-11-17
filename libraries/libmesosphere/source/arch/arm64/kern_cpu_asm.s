@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -62,8 +62,7 @@ _ZN3ams4kern4arch5arm643cpu23SynchronizeAllCoresImplEPii:
     stlr wzr, [x0]
     ret
 
-
-/* ams::kern::arch::arm64::cpu::ClearPageToZero(void *) */
+/* ams::kern::arch::arm64::cpu::ClearPageToZeroImpl(void *) */
 .section    .text._ZN3ams4kern4arch5arm643cpu19ClearPageToZeroImplEPv, "ax", %progbits
 .global     _ZN3ams4kern4arch5arm643cpu19ClearPageToZeroImplEPv
 .type       _ZN3ams4kern4arch5arm643cpu19ClearPageToZeroImplEPv, %function

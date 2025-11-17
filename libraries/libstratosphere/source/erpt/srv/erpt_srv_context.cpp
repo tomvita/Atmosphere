@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -25,11 +25,11 @@ namespace ams::erpt::srv {
 
         using ContextList = util::IntrusiveListBaseTraits<Context>::ListType;
 
-        ContextList g_category_list;
+        constinit ContextList g_category_list;
 
     }
 
-    Context::Context(CategoryId cat, u32 max_records) : category(cat), max_record_count(max_records), record_count(0) {
+    Context::Context(CategoryId cat) : m_category(cat) {
         g_category_list.push_front(*this);
     }
 
@@ -38,12 +38,11 @@ namespace ams::erpt::srv {
     }
 
     Result Context::AddCategoryToReport(Report *report) {
-        R_SUCCEED_IF(this->record_list.empty());
-
-        for (auto it = this->record_list.begin(); it != this->record_list.end(); it++) {
-            for (u32 i = 0; i < it->ctx.field_count; i++) {
-                auto *field = std::addressof(it->ctx.fields[i]);
-                u8 *arr_buf = it->ctx.array_buffer;
+        if (m_record != nullptr) {
+            const auto *entry = m_record->GetContextEntryPtr();
+            for (u32 i = 0; i < entry->field_count; i++) {
+                auto *field = std::addressof(entry->fields[i]);
+                u8 *arr_buf = entry->array_buffer;
 
                 switch (field->type) {
                     case FieldType_Bool:       R_TRY(Cipher::AddField(report, field->id, field->value_bool));  break;
@@ -62,70 +61,53 @@ namespace ams::erpt::srv {
                     case FieldType_I8Array:    R_TRY(Cipher::AddField(report, field->id, reinterpret_cast<  s8 *>(arr_buf + field->value_array.start_idx), field->value_array.size / sizeof(s8)));   break;
                     case FieldType_I32Array:   R_TRY(Cipher::AddField(report, field->id, reinterpret_cast< s32 *>(arr_buf + field->value_array.start_idx), field->value_array.size / sizeof(s32)));  break;
                     case FieldType_I64Array:   R_TRY(Cipher::AddField(report, field->id, reinterpret_cast< s64 *>(arr_buf + field->value_array.start_idx), field->value_array.size / sizeof(s64)));  break;
-                    default:                   return erpt::ResultInvalidArgument();
+                    default:                   R_THROW(erpt::ResultInvalidArgument());
                 }
             }
         }
 
-        return ResultSuccess();
-    }
-
-    Result Context::AddContextToCategory(const ContextEntry *entry, const u8 *data, u32 data_size) {
-        ContextRecord *record = new ContextRecord();
-        R_UNLESS(record != nullptr, erpt::ResultOutOfMemory());
-        auto guard = SCOPE_GUARD { delete record; };
-
-        R_TRY(record->Initialize(entry, data, data_size));
-
-        guard.Cancel();
-        this->AddContextRecordToCategory(record);
-        return ResultSuccess();
-    }
-
-    Result Context::AddContextRecordToCategory(ContextRecord *record) {
-        if (this->record_count < this->max_record_count) {
-            this->record_list.push_front(*record);
-            this->record_count++;
-        } else {
-            ContextRecord *back = std::addressof(this->record_list.back());
-            this->record_list.pop_back();
-            this->record_list.push_front(*record);
-            delete back;
-        }
-
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result Context::SubmitContext(const ContextEntry *entry, const u8 *data, u32 data_size) {
-        for (auto it = g_category_list.begin(); it != g_category_list.end(); it++) {
-            if (it->category == entry->category) {
-                return it->AddContextToCategory(entry, data, data_size);
-            }
-        }
-        return erpt::ResultCategoryNotFound();
+        auto record = std::make_unique<ContextRecord>();
+        R_UNLESS(record != nullptr, erpt::ResultOutOfMemory());
+
+        R_TRY(record->Initialize(entry, data, data_size));
+
+        R_RETURN(SubmitContextRecord(std::move(record)));
     }
 
-    Result Context::SubmitContextRecord(ContextRecord *record) {
-        for (auto it = g_category_list.begin(); it != g_category_list.end(); it++) {
-            if (it->category == record->ctx.category) {
-                return it->AddContextRecordToCategory(record);
-            }
-        }
-        return erpt::ResultCategoryNotFound();
+    Result Context::SubmitContextRecord(std::unique_ptr<ContextRecord> record) {
+        auto it = util::range::find_if(g_category_list, [&](const Context &cur) {
+            return cur.m_category == record->GetContextEntryPtr()->category;
+        });
+        R_UNLESS(it != g_category_list.end(), erpt::ResultCategoryNotFound());
+
+        it->m_record = std::move(record);
+        R_SUCCEED();
     }
 
     Result Context::WriteContextsToReport(Report *report) {
         R_TRY(report->Open(ReportOpenType_Create));
+        ON_SCOPE_EXIT { report->Close(); };
+
         R_TRY(Cipher::Begin(report, ContextRecord::GetRecordCount()));
 
         for (auto it = g_category_list.begin(); it != g_category_list.end(); it++) {
             R_TRY(it->AddCategoryToReport(report));
         }
 
-        Cipher::End(report);
-        report->Close();
+        R_RETURN(Cipher::End(report));
+    }
 
-        return ResultSuccess();
+    Result Context::ClearContext(CategoryId cat) {
+        /* Make an empty record for the category. */
+        auto record = std::make_unique<ContextRecord>(cat);
+        R_UNLESS(record != nullptr, erpt::ResultOutOfMemory());
+
+        /* Submit the context record. */
+        R_RETURN(SubmitContextRecord(std::move(record)));
     }
 
 }

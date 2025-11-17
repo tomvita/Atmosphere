@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -26,7 +26,7 @@ namespace ams::fuse {
         HardwareType_Hoag   = 2,
         HardwareType_Iowa   = 3,
         HardwareType_Calcio = 4,
-        HardwareType_Five   = 5,
+        HardwareType_Aula   = 5,
 
         HardwareType_Undefined = 0xF,
     };
@@ -51,11 +51,11 @@ namespace ams::fuse {
         DramId_IcosaSamsung4GB    =  0,
         DramId_IcosaHynix4GB      =  1,
         DramId_IcosaMicron4GB     =  2,
-        DramId_CopperSamsung4GB   =  3,
+        DramId_IowaHynix1y4GB     =  3,
         DramId_IcosaSamsung6GB    =  4,
-        DramId_CopperHynix4GB     =  5,
-        DramId_CopperMicron4GB    =  6,
-        DramId_IowaX1X2Samsung4GB =  7,
+        DramId_HoagHynix1y4GB     =  5,
+        DramId_AulaHynix1y4GB     =  6,
+        DramId_Deprecated7        =  7,
         DramId_IowaSansung4GB     =  8,
         DramId_IowaSamsung8GB     =  9,
         DramId_IowaHynix4GB       = 10,
@@ -64,22 +64,32 @@ namespace ams::fuse {
         DramId_HoagSamsung8GB     = 13,
         DramId_HoagHynix4GB       = 14,
         DramId_HoagMicron4GB      = 15,
-        DramId_IowaSamsung4GBY    = 16,
+        DramId_Deprecated16       = 16,
         DramId_IowaSamsung1y4GBX  = 17,
         DramId_IowaSamsung1y8GBX  = 18,
         DramId_HoagSamsung1y4GBX  = 19,
-        DramId_IowaSamsung1y4GBY  = 20,
-        DramId_IowaSamsung1y8GBY  = 21,
-        DramId_IowaSamsung1y4GBA  = 22,
-        DramId_FiveSamsung1y8GBX  = 23,
-        DramId_FiveSamsung1y4GBX  = 24,
+        DramId_IowaSamsung1z4GB   = 20,
+        DramId_HoagSamsung1z4GB   = 21,
+        DramId_AulaSamsung1z4GB   = 22,
+        DramId_HoagSamsung1y8GBX  = 23,
+        DramId_AulaSamsung1y4GBX  = 24,
+        DramId_IowaMicron1y4GB    = 25,
+        DramId_HoagMicron1y4GB    = 26,
+        DramId_AulaMicron1y4GB    = 27,
+        DramId_AulaSamsung1y8GBX  = 28,
+        DramId_IowaX1X2Samsung4GB = 29,
+        DramId_HoagX1X2Samsung4GB = 30,
+        DramId_AulaX1X2Samsung4GB = 31,
+        DramId_IowaSamsung4GBY    = 32,
+        DramId_HoagSamsung4GBY    = 33,
+        DramId_AulaSamsung4GBY    = 34,
 
         DramId_Count,
     };
 
-    enum QuestState {
-        QuestState_Disabled = 0,
-        QuestState_Enabled  = 1,
+    enum RetailInteractiveDisplayState {
+        RetailInteractiveDisplayState_Disabled = 0,
+        RetailInteractiveDisplayState_Enabled  = 1,
     };
 
     void SetRegisterAddress(uintptr_t address);
@@ -96,18 +106,21 @@ namespace ams::fuse {
 
     DramId GetDramId();
 
-    void            GetEcid(br::BootEcid *out);
-    HardwareType    GetHardwareType();
-    HardwareState   GetHardwareState();
-    u64             GetDeviceId();
-    PatchVersion    GetPatchVersion();
-    QuestState      GetQuestState();
-    pmic::Regulator GetRegulator();
-    int             GetDeviceUniqueKeyGeneration();
+    bool GetSecureBootKey(void *dst);
 
-    SocType         GetSocType();
-    int             GetExpectedFuseVersion(TargetFirmware target_fw);
-    bool            HasRcmVulnerabilityPatch();
+    void                          GetEcid(br::BootEcid *out);
+    HardwareType                  GetHardwareType();
+    HardwareState                 GetHardwareState();
+    u64                           GetDeviceId();
+    PatchVersion                  GetPatchVersion();
+    RetailInteractiveDisplayState GetRetailInteractiveDisplayState();
+    pmic::Regulator               GetRegulator();
+    int                           GetDeviceUniqueKeyGeneration();
+
+    SocType                       GetSocType();
+    int                           GetExpectedFuseVersion(TargetFirmware target_fw);
+    int                           GetFuseVersion();
+    bool                          HasRcmVulnerabilityPatch();
 
     bool IsOdmProductionMode();
     void ConfigureFuseBypass();

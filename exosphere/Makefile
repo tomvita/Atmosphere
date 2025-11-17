@@ -1,47 +1,41 @@
-TARGETS := exosphere.bin warmboot.bin program.lz4
-CLEAN_TARGETS := exosphere-clean program-clean boot_code-clean warmboot-clean
+ATMOSPHERE_BUILD_CONFIGS :=
+all: nx_release
 
-SUBFOLDERS := $(MODULES)
+THIS_MAKEFILE     := $(abspath $(lastword $(MAKEFILE_LIST)))
+CURRENT_DIRECTORY := $(abspath $(dir $(THIS_MAKEFILE)))
 
-all: exosphere.bin warmboot.bin
+define ATMOSPHERE_ADD_TARGET
 
-clean: $(CLEAN_TARGETS)
-	@rm -f exosphere.bin
+ATMOSPHERE_BUILD_CONFIGS += $(strip $1)
 
-exosphere.bin: program.lz4 boot_code.lz4
-	$(MAKE) -C loader_stub
-	@cp loader_stub/loader_stub.bin exosphere.bin
-	@printf LENY >> exosphere.bin
-	@echo "Built exosphere.bin..."
+$(strip $1):
+	@echo "Building $(strip $1)"
+	@$$(MAKE) -f $(CURRENT_DIRECTORY)/exosphere.mk ATMOSPHERE_MAKEFILE_TARGET="$(strip $1)" ATMOSPHERE_BUILD_NAME="$(strip $2)" ATMOSPHERE_BOARD="$(strip $3)" ATMOSPHERE_CPU="$(strip $4)" $(strip $5)
 
-program.lz4: build_program
-	@cp program/program.lz4 program.lz4
-	@cp program/boot_code.lz4 boot_code.lz4
+clean-$(strip $1):
+	@echo "Cleaning $(strip $1)"
+	@$$(MAKE) -f $(CURRENT_DIRECTORY)/exosphere.mk clean ATMOSPHERE_MAKEFILE_TARGET="$(strip $1)" ATMOSPHERE_BUILD_NAME="$(strip $2)" ATMOSPHERE_BOARD="$(strip $3)" ATMOSPHERE_CPU="$(strip $4)" $(strip $5)
 
-build_program:
-	$(MAKE) -C program
+endef
 
-warmboot.bin: build_warmboot
-	@cp warmboot/warmboot.bin warmboot.bin
+define ATMOSPHERE_ADD_TARGETS
 
-build_warmboot:
-	$(MAKE) -C warmboot
+$(eval $(call ATMOSPHERE_ADD_TARGET, $(strip $1)_release, release, $(strip $2), $(strip $3), \
+    ATMOSPHERE_BUILD_SETTINGS="$(strip $4)" \
+))
 
-boot_code.lz4: program.lz4
+$(eval $(call ATMOSPHERE_ADD_TARGET, $(strip $1)_debug, debug, $(strip $2), $(strip $3), \
+    ATMOSPHERE_BUILD_SETTINGS="$(strip $4) -DAMS_BUILD_FOR_DEBUGGING" ATMOSPHERE_BUILD_FOR_DEBUGGING=1 \
+))
 
-exosphere-clean:
-	$(MAKE) -C loader_stub clean
-	@rm -f exosphere.bin
+$(eval $(call ATMOSPHERE_ADD_TARGET, $(strip $1)_audit, audit, $(strip $2), $(strip $3), \
+    ATMOSPHERE_BUILD_SETTINGS="$(strip $4) -DAMS_BUILD_FOR_AUDITING" ATMOSPHERE_BUILD_FOR_DEBUGGING=1 ATMOSPHERE_BUILD_FOR_AUDITING=1 \
+))
 
-program-clean:
-	$(MAKE) -C program clean
-	@rm -f program.lz4
+endef
 
-warmboot-clean:
-	$(MAKE) -C warmboot clean
-	@rm -f warmboot.bin
+$(eval $(call ATMOSPHERE_ADD_TARGETS, nx, nx-hac-001, arm-cortex-a57,))
 
-boot_code-clean:
-	@rm -f boot_code.lz4
+clean: $(foreach config,$(ATMOSPHERE_BUILD_CONFIGS),clean-$(config))
 
-.PHONY: all clean build_program $(CLEAN_TARGETS)
+.PHONY: all clean $(foreach config,$(ATMOSPHERE_BUILD_CONFIGS), $(config) clean-$(config))

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -23,12 +23,8 @@ namespace ams::mitm::sysupdater {
         alignas(os::MemoryPageSize) u8 g_boot_image_update_buffer[64_KB];
 
         updater::BootImageUpdateType GetBootImageUpdateType() {
-            int boot_image_update_type;
-            auto size = settings::fwdbg::GetSettingsItemValue(std::addressof(boot_image_update_type), sizeof(boot_image_update_type), "systeminitializer", "boot_image_update_type");
-            if (size != sizeof(boot_image_update_type)) {
-                return updater::BootImageUpdateType::Erista;
-            }
-            return updater::GetBootImageUpdateType(boot_image_update_type);
+            /* NOTE: Here Nintendo uses the value of system setting systeminitializer!boot_image_update_type...but we prefer not to take the risk. */
+            return updater::GetBootImageUpdateType(spl::GetHardwareType());
         }
 
         Result MarkPreCommitForBootImages() {
@@ -37,7 +33,7 @@ namespace ams::mitm::sysupdater {
             R_TRY(updater::MarkVerifyingRequired(updater::BootModeType::Safe, g_boot_image_update_buffer, sizeof(g_boot_image_update_buffer)));
 
             /* Pre-commit is now marked. */
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         Result UpdateBootImages() {
@@ -63,7 +59,7 @@ namespace ams::mitm::sysupdater {
                 R_TRY(updater::MarkVerified(boot_mode, g_boot_image_update_buffer, sizeof(g_boot_image_update_buffer)));
 
                 /* The boot images are updated. */
-                return ResultSuccess();
+                R_SUCCEED();
             };
 
             /* Get the boot image update type. */
@@ -76,14 +72,14 @@ namespace ams::mitm::sysupdater {
             R_TRY(UpdateBootImageImpl(updater::BootModeType::Normal, boot_image_update_type));
 
             /* Both sets of images are updated. */
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
     }
 
     Result SystemUpdateApplyManager::ApplyPackageTask(ncm::PackageSystemDowngradeTask *task) {
         /* Lock the apply mutex. */
-        std::scoped_lock lk(this->apply_mutex);
+        std::scoped_lock lk(m_apply_mutex);
 
         /* NOTE: Here, Nintendo creates a system report for the update. */
 
@@ -96,7 +92,7 @@ namespace ams::mitm::sysupdater {
         /* Update the boot images. */
         R_TRY(UpdateBootImages());
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
 }

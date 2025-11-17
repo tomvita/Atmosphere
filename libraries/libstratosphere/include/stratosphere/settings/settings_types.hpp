@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,6 +18,21 @@
 #include <vapours.hpp>
 
 namespace ams::settings {
+
+    constexpr size_t SettingsNameLengthMax = 0x40;
+    constexpr size_t SettingsItemKeyLengthMax = 0x40;
+
+    struct SettingsName : public sf::LargeData {
+        char value[util::AlignUp(SettingsNameLengthMax + 1, alignof(u64))];
+    };
+
+    static_assert(util::is_pod<SettingsName>::value && sizeof(SettingsName) > SettingsNameLengthMax);
+
+    struct SettingsItemKey : public sf::LargeData {
+        char value[util::AlignUp(SettingsItemKeyLengthMax + 1, alignof(u64))];
+    };
+
+    static_assert(util::is_pod<SettingsItemKey>::value && sizeof(SettingsItemKey) > SettingsItemKeyLengthMax);
 
     enum Language {
         Language_Japanese,
@@ -38,7 +53,8 @@ namespace ams::settings {
         /* 4.0.0+ */
         Language_SimplifiedChinese,
         Language_TraditionalChinese,
-
+        /* 10.1.0+ */
+        Language_PortugueseBr,
         Language_Count,
     };
 
@@ -47,20 +63,16 @@ namespace ams::settings {
 
         char name[MaxLength];
 
-        static constexpr LanguageCode Encode(const char *name, size_t name_size) {
+        static constexpr LanguageCode Encode(util::string_view name) {
             LanguageCode out{};
-            for (size_t i = 0; i < MaxLength && i < name_size; i++) {
+            for (size_t i = 0; i < MaxLength && i < name.size(); i++) {
                 out.name[i] = name[i];
             }
             return out;
         }
 
-        static constexpr LanguageCode Encode(const char *name) {
-            return Encode(name, std::strlen(name));
-        }
-
         template<Language Lang>
-        static constexpr inline LanguageCode EncodeLanguage = [] {
+        static constexpr inline LanguageCode EncodeLanguage() {
             if constexpr (false) { /* ... */ }
             #define AMS_MATCH_LANGUAGE(lang, enc) else if constexpr (Lang == Language_##lang) { return LanguageCode::Encode(enc); }
             AMS_MATCH_LANGUAGE(Japanese,                "ja")
@@ -81,30 +93,34 @@ namespace ams::settings {
             /* 4.0.0+ */
             AMS_MATCH_LANGUAGE(SimplifiedChinese,       "zh-Hans")
             AMS_MATCH_LANGUAGE(TraditionalChinese,      "zh-Hant")
+            /* 10.1.0+ */
+            AMS_MATCH_LANGUAGE(PortugueseBr,            "pt-BR")
             #undef AMS_MATCH_LANGUAGE
             else { static_assert(Lang != Language_Japanese); }
-        }();
+        }
 
         static constexpr inline LanguageCode Encode(const Language language) {
             constexpr LanguageCode EncodedLanguages[Language_Count] = {
-                EncodeLanguage<Language_Japanese>,
-                EncodeLanguage<Language_AmericanEnglish>,
-                EncodeLanguage<Language_French>,
-                EncodeLanguage<Language_German>,
-                EncodeLanguage<Language_Italian>,
-                EncodeLanguage<Language_Spanish>,
-                EncodeLanguage<Language_Chinese>,
-                EncodeLanguage<Language_Korean>,
-                EncodeLanguage<Language_Dutch>,
-                EncodeLanguage<Language_Portuguese>,
-                EncodeLanguage<Language_Russian>,
-                EncodeLanguage<Language_Taiwanese>,
-                EncodeLanguage<Language_BritishEnglish>,
-                EncodeLanguage<Language_CanadianFrench>,
-                EncodeLanguage<Language_LatinAmericanSpanish>,
+                EncodeLanguage<Language_Japanese>(),
+                EncodeLanguage<Language_AmericanEnglish>(),
+                EncodeLanguage<Language_French>(),
+                EncodeLanguage<Language_German>(),
+                EncodeLanguage<Language_Italian>(),
+                EncodeLanguage<Language_Spanish>(),
+                EncodeLanguage<Language_Chinese>(),
+                EncodeLanguage<Language_Korean>(),
+                EncodeLanguage<Language_Dutch>(),
+                EncodeLanguage<Language_Portuguese>(),
+                EncodeLanguage<Language_Russian>(),
+                EncodeLanguage<Language_Taiwanese>(),
+                EncodeLanguage<Language_BritishEnglish>(),
+                EncodeLanguage<Language_CanadianFrench>(),
+                EncodeLanguage<Language_LatinAmericanSpanish>(),
                 /* 4.0.0+ */
-                EncodeLanguage<Language_SimplifiedChinese>,
-                EncodeLanguage<Language_TraditionalChinese>,
+                EncodeLanguage<Language_SimplifiedChinese>(),
+                EncodeLanguage<Language_TraditionalChinese>(),
+                /* 10.1.0+ */
+                EncodeLanguage<Language_PortugueseBr>(),
             };
             return EncodedLanguages[language];
         }
@@ -112,7 +128,7 @@ namespace ams::settings {
     };
 
     constexpr inline bool operator==(const LanguageCode &lhs, const LanguageCode &rhs) {
-        return std::strncmp(lhs.name, rhs.name, sizeof(lhs)) == 0;
+        return util::Strncmp<char>(lhs.name, rhs.name, sizeof(lhs)) == 0;
     }
 
     constexpr inline bool operator!=(const LanguageCode &lhs, const LanguageCode &rhs) {
@@ -145,7 +161,11 @@ namespace ams::settings {
     }
 
     constexpr inline bool IsValidLanguageCodeDeprecated(const LanguageCode &lc) {
-        return impl::IsValidLanguageCode(lc, std::make_index_sequence<Language_Count - 2>{});
+        return impl::IsValidLanguageCode(lc, std::make_index_sequence<Language_Count - 3>{});
+    }
+
+    constexpr inline bool IsValidLanguageCodeDeprecated2(const LanguageCode &lc) {
+        return impl::IsValidLanguageCode(lc, std::make_index_sequence<Language_Count - 1>{});
     }
 
     constexpr inline bool IsValidLanguageCode(const LanguageCode &lc) {
@@ -194,7 +214,11 @@ namespace ams::settings {
     };
 
     static_assert(util::is_pod<FirmwareVersion>::value);
+    static_assert(sizeof(FirmwareVersion) == 0x100);
+
+    #if defined(ATMOSPHERE_OS_HORIZON)
     static_assert(sizeof(FirmwareVersion) == sizeof(::SetSysFirmwareVersion));
+    #endif
 
     constexpr inline bool operator==(const FirmwareVersion &lhs, const FirmwareVersion &rhs) {
         return lhs.GetVersion() == rhs.GetVersion();
@@ -219,5 +243,32 @@ namespace ams::settings {
     constexpr inline bool operator>(const FirmwareVersion &lhs, const FirmwareVersion &rhs) {
         return !(lhs <= rhs);
     }
+
+    struct BluetoothDevicesSettings : public sf::LargeData {
+        u8 address[0x6];
+        char name[0x20];
+        u8 class_of_device[0x3];
+        u8 link_key[0x10];
+        u8 link_key_present;
+        u16 version;
+        u32 trusted_services;
+        u16 vid;
+        u16 pid;
+        u8 sub_class;
+        u8 attribute_mask;
+        u16 descriptor_length;
+        u8 descriptor[0x80];
+        u8 key_type;
+        u8 device_type;
+        u16 brr_size;
+        u8 brr[0x9];
+        u8 reserved0;
+        char name2[0xF9];
+        u8 reserved1[0x31];
+    };
+
+    #if defined(ATMOSPHERE_OS_HORIZON)
+    static_assert(sizeof(BluetoothDevicesSettings) == sizeof(::SetSysBluetoothDevicesSettings));
+    #endif
 
 }

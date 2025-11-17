@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -25,14 +25,14 @@ namespace ams::mitm::sysupdater {
             R_CONVERT(ncm::ResultInstallTaskCancelled,   ns::ResultCanceled());
         } R_END_TRY_CATCH;
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     AsyncPrepareSdCardUpdateImpl::~AsyncPrepareSdCardUpdateImpl() {
-        if (this->thread_info) {
-            os::WaitThread(this->thread_info->thread);
-            os::DestroyThread(this->thread_info->thread);
-            GetAsyncThreadAllocator()->Free(*this->thread_info);
+        if (m_thread_info) {
+            os::WaitThread(m_thread_info->thread);
+            os::DestroyThread(m_thread_info->thread);
+            GetAsyncThreadAllocator()->Free(*m_thread_info);
         }
     }
 
@@ -46,16 +46,16 @@ namespace ams::mitm::sysupdater {
 
         /* Ensure that we clean up appropriately. */
         ON_SCOPE_EXIT {
-            if (!this->thread_info) {
+            if (!m_thread_info) {
                 GetAsyncThreadAllocator()->Free(info);
             }
         };
 
         /* Create a thread for the task. */
         R_TRY(os::CreateThread(info.thread, [](void *arg) {
-            auto *_this = reinterpret_cast<AsyncPrepareSdCardUpdateImpl *>(arg);
-            _this->result = _this->Execute();
-            _this->event.Signal();
+            auto *async = reinterpret_cast<AsyncPrepareSdCardUpdateImpl *>(arg);
+            async->m_result = async->Execute();
+            async->m_event.Signal();
         }, this, info.stack, info.stack_size, info.priority));
 
         /* Set the thread name. */
@@ -65,16 +65,16 @@ namespace ams::mitm::sysupdater {
         os::StartThread(info.thread);
 
         /* Set our thread info. */
-        this->thread_info = info;
-        return ResultSuccess();
+        m_thread_info = info;
+        R_SUCCEED();
     }
 
     Result AsyncPrepareSdCardUpdateImpl::Execute() {
-        return this->task->PrepareAndExecute();
+        R_RETURN(m_task->PrepareAndExecute());
     }
 
     void AsyncPrepareSdCardUpdateImpl::CancelImpl() {
-        this->task->Cancel();
+        m_task->Cancel();
     }
 
 }

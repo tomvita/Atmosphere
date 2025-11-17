@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -20,6 +20,7 @@ namespace ams::ncm {
 
     constexpr inline s32 SystemMaxContentMetaCount   = 0x800;
     constexpr inline s32 GameCardMaxContentMetaCount = 0x800;
+    constexpr inline s32 HostMaxContentMetaCount     = 0x800;
     constexpr inline s32 UserMaxContentMetaCount     = 0x2000;
     constexpr inline s32 SdCardMaxContentMetaCount   = 0x2000;
 

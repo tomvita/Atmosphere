@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,10 +15,10 @@
  */
 
 #pragma once
-#include "sf_common.hpp"
-#include "sf_out.hpp"
-#include "cmif/sf_cmif_pointer_and_size.hpp"
-#include "sf_buffer_tags.hpp"
+#include <stratosphere/sf/sf_common.hpp>
+#include <stratosphere/sf/sf_out.hpp>
+#include <stratosphere/sf/cmif/sf_cmif_pointer_and_size.hpp>
+#include <stratosphere/sf/sf_buffer_tags.hpp>
 
 namespace ams::sf {
 
@@ -42,7 +42,7 @@ namespace ams::sf {
             } else if constexpr(TransferMode == BufferTransferMode::AutoSelect) {
                 return SfBufferAttr_HipcAutoSelect;
             } else {
-                static_assert(TransferMode != TransferMode, "Invalid BufferTransferMode");
+                static_assert(false, "Invalid BufferTransferMode");
             }
         }();
 
@@ -90,20 +90,20 @@ namespace ams::sf {
             public:
                 static constexpr u32 AdditionalAttributes = 0;
             private:
-                const cmif::PointerAndSize pas;
+                const cmif::PointerAndSize m_pas;
             protected:
                 constexpr uintptr_t GetAddressImpl() const {
-                    return this->pas.GetAddress();
+                    return m_pas.GetAddress();
                 }
 
                 template<typename Entry>
                 constexpr inline size_t GetSizeImpl() const {
-                    return this->pas.GetSize() / sizeof(Entry);
+                    return m_pas.GetSize() / sizeof(Entry);
                 }
             public:
-                constexpr BufferBase() : pas() { /* ... */ }
-                constexpr BufferBase(const cmif::PointerAndSize &_pas) : pas(_pas) { /* ... */ }
-                constexpr BufferBase(uintptr_t ptr, size_t sz) : pas(ptr, sz) { /* ... */ }
+                constexpr BufferBase() : m_pas() { /* ... */ }
+                constexpr BufferBase(const cmif::PointerAndSize &pas) : m_pas(pas) { /* ... */ }
+                constexpr BufferBase(uintptr_t ptr, size_t sz) : m_pas(ptr, sz) { /* ... */ }
         };
 
         class InBufferBase : public BufferBase {
@@ -113,11 +113,11 @@ namespace ams::sf {
                                                             SfBufferAttr_In;
             public:
                 constexpr InBufferBase() : BaseType() { /* ... */ }
-                constexpr InBufferBase(const cmif::PointerAndSize &_pas) : BaseType(_pas) { /* ... */ }
+                constexpr InBufferBase(const cmif::PointerAndSize &pas) : BaseType(pas) { /* ... */ }
                 constexpr InBufferBase(uintptr_t ptr, size_t sz) : BaseType(ptr, sz) { /* ... */ }
 
-                constexpr InBufferBase(const void *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
-                constexpr InBufferBase(const u8 *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
+                InBufferBase(const void *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
+                InBufferBase(const u8 *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
         };
 
         class OutBufferBase : public BufferBase {
@@ -127,11 +127,11 @@ namespace ams::sf {
                                                             SfBufferAttr_Out;
             public:
                 constexpr OutBufferBase() : BaseType() { /* ... */ }
-                constexpr OutBufferBase(const cmif::PointerAndSize &_pas) : BaseType(_pas) { /* ... */ }
+                constexpr OutBufferBase(const cmif::PointerAndSize &pas) : BaseType(pas) { /* ... */ }
                 constexpr OutBufferBase(uintptr_t ptr, size_t sz) : BaseType(ptr, sz) { /* ... */ }
 
-                constexpr OutBufferBase(void *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
-                constexpr OutBufferBase(u8 *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
+                OutBufferBase(void *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
+                OutBufferBase(u8 *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
         };
 
         template<BufferTransferMode TMode, u32 ExtraAttributes = 0>
@@ -143,11 +143,11 @@ namespace ams::sf {
                                                             ExtraAttributes;
             public:
                 constexpr InBufferImpl() : BaseType() { /* ... */ }
-                constexpr InBufferImpl(const cmif::PointerAndSize &_pas) : BaseType(_pas) { /* ... */ }
+                constexpr InBufferImpl(const cmif::PointerAndSize &pas) : BaseType(pas) { /* ... */ }
                 constexpr InBufferImpl(uintptr_t ptr, size_t sz) : BaseType(ptr, sz) { /* ... */ }
 
-                constexpr InBufferImpl(const void *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
-                constexpr InBufferImpl(const u8 *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
+                InBufferImpl(const void *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
+                InBufferImpl(const u8 *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
 
                 constexpr const u8 *GetPointer() const {
                     return reinterpret_cast<const u8 *>(this->GetAddressImpl());
@@ -167,11 +167,11 @@ namespace ams::sf {
                                                             ExtraAttributes;
             public:
                 constexpr OutBufferImpl() : BaseType() { /* ... */ }
-                constexpr OutBufferImpl(const cmif::PointerAndSize &_pas) : BaseType(_pas) { /* ... */ }
+                constexpr OutBufferImpl(const cmif::PointerAndSize &pas) : BaseType(pas) { /* ... */ }
                 constexpr OutBufferImpl(uintptr_t ptr, size_t sz) : BaseType(ptr, sz) { /* ... */ }
 
-                constexpr OutBufferImpl(void *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
-                constexpr OutBufferImpl(u8 *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
+                OutBufferImpl(void *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
+                OutBufferImpl(u8 *ptr, size_t sz) : BaseType(reinterpret_cast<uintptr_t>(ptr), sz) { /* ... */ }
 
                 constexpr u8 *GetPointer() const {
                     return reinterpret_cast<u8 *>(this->GetAddressImpl());
@@ -190,8 +190,8 @@ namespace ams::sf {
                 static constexpr u32 AdditionalAttributes = BaseType::AdditionalAttributes;
             public:
                 constexpr InArrayImpl() : BaseType() { /* ... */ }
-                constexpr InArrayImpl(const cmif::PointerAndSize &_pas) : BaseType(_pas) { /* ... */ }
-                constexpr InArrayImpl(const T *ptr, size_t num_elements) : BaseType(reinterpret_cast<uintptr_t>(ptr), num_elements * sizeof(T)) { /* ... */ }
+                constexpr InArrayImpl(const cmif::PointerAndSize &pas) : BaseType(pas) { /* ... */ }
+                InArrayImpl(const T *ptr, size_t num_elements) : BaseType(reinterpret_cast<uintptr_t>(ptr), num_elements * sizeof(T)) { /* ... */ }
 
                 constexpr const T *GetPointer() const {
                     return reinterpret_cast<const T *>(this->GetAddressImpl());
@@ -206,11 +206,11 @@ namespace ams::sf {
                 }
 
                 constexpr explicit operator Span<const T>() const {
-                    return {this->GetPointer(), static_cast<ptrdiff_t>(this->GetSize())};
+                    return {this->GetPointer(), this->GetSize()};
                 }
 
                 constexpr Span<const T> ToSpan() const {
-                    return {this->GetPointer(), static_cast<ptrdiff_t>(this->GetSize())};
+                    return {this->GetPointer(), this->GetSize()};
                 }
         };
 
@@ -222,8 +222,8 @@ namespace ams::sf {
                 static constexpr u32 AdditionalAttributes = BaseType::AdditionalAttributes;
             public:
                 constexpr OutArrayImpl() : BaseType() { /* ... */ }
-                constexpr OutArrayImpl(const cmif::PointerAndSize &_pas) : BaseType(_pas) { /* ... */ }
-                constexpr OutArrayImpl(T *ptr, size_t num_elements) : BaseType(reinterpret_cast<uintptr_t>(ptr), num_elements * sizeof(T)) { /* ... */ }
+                constexpr OutArrayImpl(const cmif::PointerAndSize &pas) : BaseType(pas) { /* ... */ }
+                OutArrayImpl(T *ptr, size_t num_elements) : BaseType(reinterpret_cast<uintptr_t>(ptr), num_elements * sizeof(T)) { /* ... */ }
 
                 constexpr T *GetPointer() const {
                     return reinterpret_cast<T *>(this->GetAddressImpl());
@@ -238,11 +238,11 @@ namespace ams::sf {
                 }
 
                 constexpr explicit operator Span<T>() const {
-                    return {this->GetPointer(), static_cast<ptrdiff_t>(this->GetSize())};
+                    return {this->GetPointer(), this->GetSize()};
                 }
 
                 constexpr Span<T> ToSpan() const {
-                    return {this->GetPointer(), static_cast<ptrdiff_t>(this->GetSize())};
+                    return {this->GetPointer(), this->GetSize()};
                 }
         };
 
@@ -256,12 +256,16 @@ namespace ams::sf {
     using InNonSecureBuffer   = typename impl::InBufferImpl<BufferTransferMode::MapAlias, SfBufferAttr_HipcMapTransferAllowsNonSecure>;
     using InNonDeviceBuffer   = typename impl::InBufferImpl<BufferTransferMode::MapAlias, SfBufferAttr_HipcMapTransferAllowsNonDevice>;
 
+    using InNonSecureAutoSelectBuffer = typename impl::InBufferImpl<BufferTransferMode::AutoSelect, SfBufferAttr_HipcMapTransferAllowsNonSecure>;
+
     using OutBuffer           = typename impl::OutBufferImpl<BufferTransferMode::MapAlias>;
     using OutMapAliasBuffer   = typename impl::OutBufferImpl<BufferTransferMode::MapAlias>;
     using OutPointerBuffer    = typename impl::OutBufferImpl<BufferTransferMode::Pointer>;
     using OutAutoSelectBuffer = typename impl::OutBufferImpl<BufferTransferMode::AutoSelect>;
     using OutNonSecureBuffer  = typename impl::OutBufferImpl<BufferTransferMode::MapAlias, SfBufferAttr_HipcMapTransferAllowsNonSecure>;
     using OutNonDeviceBuffer  = typename impl::OutBufferImpl<BufferTransferMode::MapAlias, SfBufferAttr_HipcMapTransferAllowsNonDevice>;
+
+    using OutNonSecureAutoSelectBuffer = typename impl::OutBufferImpl<BufferTransferMode::AutoSelect, SfBufferAttr_HipcMapTransferAllowsNonSecure>;
 
     template<typename T>
     using InArray             = typename impl::InArrayImpl<T>;

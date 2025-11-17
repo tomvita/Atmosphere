@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -41,19 +41,19 @@ namespace ams::fatal::srv {
             if (hos::GetVersion() >= hos::Version_8_0_0) {
                 /* On 8.0.0+, convert to module id + use clkrst API. */
                 PcvModuleId module_id;
-                R_TRY(pcvGetModuleId(&module_id, module));
+                R_TRY(pcvGetModuleId(std::addressof(module_id), module));
 
                 ClkrstSession session;
-                R_TRY(clkrstOpenSession(&session, module_id, 3));
-                ON_SCOPE_EXIT { clkrstCloseSession(&session); };
+                R_TRY(clkrstOpenSession(std::addressof(session), module_id, 3));
+                ON_SCOPE_EXIT { clkrstCloseSession(std::addressof(session)); };
 
-                R_TRY(clkrstSetClockRate(&session, hz));
+                R_TRY(clkrstSetClockRate(std::addressof(session), hz));
             } else {
                 /* On 1.0.0-7.0.1, use pcv API. */
                 R_TRY(pcvSetClockRate(module, hz));
             }
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         Result AdjustClockTask::AdjustClock() {
@@ -66,18 +66,18 @@ namespace ams::fatal::srv {
             R_TRY(AdjustClockForModule(PcvModule_GPU,    GPU_CLOCK_307MHZ));
             R_TRY(AdjustClockForModule(PcvModule_EMC,    EMC_CLOCK_1331MHZ));
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         Result AdjustClockTask::Run() {
-            return AdjustClock();
+            R_RETURN(AdjustClock());
         }
 
     }
 
     ITask *GetAdjustClockTask(const ThrowContext *ctx) {
         g_adjust_clock_task.Initialize(ctx);
-        return &g_adjust_clock_task;
+        return std::addressof(g_adjust_clock_task);
     }
 
 }

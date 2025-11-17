@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,9 +15,11 @@
  */
 #pragma once
 #include <vapours.hpp>
+#include <stratosphere/fs/fs_content_attributes.hpp>
 
 namespace ams::fs {
 
+    /* ACCURATE_TO_VERSION: Unknown */
     union RightsId {
         u8 data[0x10];
         u64 data64[2];
@@ -40,7 +42,7 @@ namespace ams::fs {
     constexpr inline RightsId InvalidRightsId = {};
 
     /* Rights ID API */
-    Result GetRightsId(RightsId *out, const char *path);
-    Result GetRightsId(RightsId *out, u8 *out_key_generation, const char *path);
+    Result GetRightsId(RightsId *out, const char *path, fs::ContentAttributes attr);
+    Result GetRightsId(RightsId *out, u8 *out_key_generation, const char *path, fs::ContentAttributes attr);
 
 }

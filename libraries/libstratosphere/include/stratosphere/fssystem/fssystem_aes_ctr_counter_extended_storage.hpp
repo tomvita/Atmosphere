@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -20,6 +20,7 @@
 
 namespace ams::fssystem {
 
+    /* ACCURATE_TO_VERSION: Unknown */
     class AesCtrCounterExtendedStorage : public ::ams::fs::IStorage, public ::ams::fs::impl::Newable {
         NON_COPYABLE(AesCtrCounterExtendedStorage);
         NON_MOVEABLE(AesCtrCounterExtendedStorage);
@@ -31,7 +32,7 @@ namespace ams::fssystem {
 
             using IAllocator = BucketTree::IAllocator;
 
-            using DecryptFunction = void(*)(void *dst, size_t dst_size, s32 index, const void *enc_key, size_t enc_key_size, const void *iv, size_t iv_size, const void *src, size_t src_size);
+            using DecryptFunction = void(*)(void *dst, size_t dst_size, u8 index, u8 gen, const void *enc_key, size_t enc_key_size, const void *iv, size_t iv_size, const void *src, size_t src_size);
 
             class IDecryptor {
                 public:
@@ -41,8 +42,14 @@ namespace ams::fssystem {
             };
 
             struct Entry {
+                enum class Encryption : u8 {
+                    Encrypted    = 0,
+                    NotEncrypted = 1,
+                };
+
                 u8 offset[sizeof(s64)];
-                s32 reserved;
+                Encryption encryption_value;
+                u8 reserved[3];
                 s32 generation;
 
                 void SetOffset(s64 value) {
@@ -71,44 +78,53 @@ namespace ams::fssystem {
                 return BucketTree::QueryEntryStorageSize(NodeSize, sizeof(Entry), entry_count);
             }
 
-            static Result CreateExternalDecryptor(std::unique_ptr<IDecryptor> *out, DecryptFunction func, s32 key_index);
+            static Result CreateExternalDecryptor(std::unique_ptr<IDecryptor> *out, DecryptFunction func, s32 key_index, s32 key_generation);
             static Result CreateSoftwareDecryptor(std::unique_ptr<IDecryptor> *out);
         private:
-            BucketTree table;
-            fs::SubStorage data_storage;
-            u8 key[KeySize];
-            u32 secure_value;
-            s64 counter_offset;
-            std::unique_ptr<IDecryptor> decryptor;
+            BucketTree m_table;
+            fs::SubStorage m_data_storage;
+            u8 m_key[KeySize];
+            u32 m_secure_value;
+            s64 m_counter_offset;
+            std::unique_ptr<IDecryptor> m_decryptor;
         public:
-            AesCtrCounterExtendedStorage() : table(), data_storage(), secure_value(), counter_offset(), decryptor() { /* ... */ }
+            AesCtrCounterExtendedStorage() : m_table(), m_data_storage(), m_secure_value(), m_counter_offset(), m_decryptor() { /* ... */ }
             virtual ~AesCtrCounterExtendedStorage() { this->Finalize(); }
 
             Result Initialize(IAllocator *allocator, const void *key, size_t key_size, u32 secure_value, s64 counter_offset, fs::SubStorage data_storage, fs::SubStorage node_storage, fs::SubStorage entry_storage, s32 entry_count, std::unique_ptr<IDecryptor> &&decryptor);
             void Finalize();
 
-            bool IsInitialized() const { return this->table.IsInitialized(); }
+            bool IsInitialized() const { return m_table.IsInitialized(); }
 
             virtual Result Read(s64 offset, void *buffer, size_t size) override;
             virtual Result OperateRange(void *dst, size_t dst_size, fs::OperationId op_id, s64 offset, s64 size, const void *src, size_t src_size) override;
 
             virtual Result GetSize(s64 *out) override {
                 AMS_ASSERT(out != nullptr);
-                *out = this->table.GetSize();
-                return ResultSuccess();
+
+                BucketTree::Offsets offsets;
+                R_TRY(m_table.GetOffsets(std::addressof(offsets)));
+
+                *out = offsets.end_offset;
+
+                R_SUCCEED();
             }
 
             virtual Result Flush() override {
-                return ResultSuccess();
+                R_SUCCEED();
             }
 
             virtual Result Write(s64 offset, const void *buffer, size_t size) override {
-                return fs::ResultUnsupportedOperationInAesCtrCounterExtendedStorageA();
+                AMS_UNUSED(offset, buffer, size);
+                R_THROW(fs::ResultUnsupportedWriteForAesCtrCounterExtendedStorage());
             }
 
             virtual Result SetSize(s64 size) override {
-                return fs::ResultUnsupportedOperationInAesCtrCounterExtendedStorageB();
+                AMS_UNUSED(size);
+                R_THROW(fs::ResultUnsupportedSetSizeForAesCtrCounterExtendedStorage());
             }
+
+            Result GetEntryList(Entry *out_entries, s32 *out_entry_count, s32 entry_count, s64 offset, s64 size);
         private:
             Result Initialize(IAllocator *allocator, const void *key, size_t key_size, u32 secure_value, fs::SubStorage data_storage, fs::SubStorage table_storage);
     };

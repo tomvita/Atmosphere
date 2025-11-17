@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -27,12 +27,26 @@ namespace ams::kern::init {
         u32 rw_end_offset;
         u32 bss_offset;
         u32 bss_end_offset;
-        u32 ini_load_offset;
+        u32 resource_offset;
         u32 dynamic_offset;
         u32 init_array_offset;
         u32 init_array_end_offset;
+        u32 sysreg_offset;
     };
     static_assert(util::is_pod<KernelLayout>::value);
-    static_assert(sizeof(KernelLayout) == 0x30);
+    static_assert(sizeof(KernelLayout) == 0x34);
+
+    #if defined(ATMOSPHERE_ARCH_ARM64)
+    struct KernelSystemRegisters {
+        u64 ttbr0_el1;
+        u64 ttbr1_el1;
+        u64 tcr_el1;
+        u64 mair_el1;
+        u64 sctlr_el1;
+    };
+    #else
+    struct KernelSystemRegisters {
+    };
+    #endif
 
 }

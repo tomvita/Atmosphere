@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -24,61 +24,63 @@ namespace ams::erpt::srv {
         attachment_id.uuid.ToString(uuid_str, sizeof(uuid_str));
 
         AttachmentFileName attachment_name;
-        std::snprintf(attachment_name.name, sizeof(attachment_name.name), "%s/%s.att", ReportStoragePath, uuid_str);
+        util::SNPrintf(attachment_name.name, sizeof(attachment_name.name), "%s:/%s.att", ReportStoragePath, uuid_str);
         return attachment_name;
     }
 
-    Attachment::Attachment(JournalRecord<AttachmentInfo> *r) : record(r) {
-        this->record->AddReference();
+    Attachment::Attachment(JournalRecord<AttachmentInfo> *r) : m_record(r) {
+        m_record->AddReference();
     }
 
     Attachment::~Attachment() {
         this->CloseStream();
-        if (this->record->RemoveReference()) {
-            this->DeleteStream(this->FileName().name);
-            delete this->record;
+        if (m_record->RemoveReference()) {
+            if (R_FAILED(this->DeleteStream(this->FileName().name))) {
+                /* TODO: Log failure? */
+            }
+            delete m_record;
         }
     }
 
-    AttachmentFileName Attachment::FileName() {
-        return FileName(this->record->info.attachment_id);
+    AttachmentFileName Attachment::FileName() const {
+        return FileName(m_record->m_info.attachment_id);
     }
 
     Result Attachment::Open(AttachmentOpenType type) {
         switch (type) {
-            case AttachmentOpenType_Create: return this->OpenStream(this->FileName().name, StreamMode_Write, AttachmentStreamBufferSize);
-            case AttachmentOpenType_Read:   return this->OpenStream(this->FileName().name, StreamMode_Read,  AttachmentStreamBufferSize);
-            default:                        return erpt::ResultInvalidArgument();
+            case AttachmentOpenType_Create: R_RETURN(this->OpenStream(this->FileName().name, StreamMode_Write, AttachmentStreamBufferSize));
+            case AttachmentOpenType_Read:   R_RETURN(this->OpenStream(this->FileName().name, StreamMode_Read,  AttachmentStreamBufferSize));
+            default:                        R_THROW(erpt::ResultInvalidArgument());
         }
     }
 
     Result Attachment::Read(u32 *out_read_count, u8 *dst, u32 dst_size) {
-        return this->ReadStream(out_read_count, dst, dst_size);
+        R_RETURN(this->ReadStream(out_read_count, dst, dst_size));
     }
 
     Result Attachment::Delete() {
-        return this->DeleteStream(this->FileName().name);
+        R_RETURN(this->DeleteStream(this->FileName().name));
     }
 
     void Attachment::Close() {
         return this->CloseStream();
     }
 
-    Result Attachment::GetFlags(AttachmentFlagSet *out) {
-        *out = this->record->info.flags;
-        return ResultSuccess();
+    Result Attachment::GetFlags(AttachmentFlagSet *out) const {
+        *out = m_record->m_info.flags;
+        R_SUCCEED();
     }
 
     Result Attachment::SetFlags(AttachmentFlagSet flags) {
-        if (((~this->record->info.flags) & flags).IsAnySet()) {
-            this->record->info.flags |= flags;
-            return Journal::Commit();
+        if (((~m_record->m_info.flags) & flags).IsAnySet()) {
+            m_record->m_info.flags |= flags;
+            R_RETURN(Journal::Commit());
         }
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
-    Result Attachment::GetSize(s64 *out) {
-        return this->GetStreamSize(out);
+    Result Attachment::GetSize(s64 *out) const {
+        R_RETURN(this->GetStreamSize(out));
     }
 
 }

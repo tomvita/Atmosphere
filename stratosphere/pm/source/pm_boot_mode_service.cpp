@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -21,7 +21,8 @@ namespace ams::pm {
     namespace {
 
         /* Global bootmode. */
-        BootMode g_boot_mode = BootMode::Normal;
+        constinit BootMode g_boot_mode = BootMode::Normal;
+        constinit u32 g_unknown = 0;
 
     }
 
@@ -45,6 +46,16 @@ namespace ams::pm {
 
     void BootModeService::SetMaintenanceBoot() {
         pm::bm::SetMaintenanceBoot();
+    }
+
+    void BootModeService::GetUnknown(sf::Out<u32> out) {
+        out.SetValue(g_unknown);
+    }
+
+    Result BootModeService::SetUnknown(u32 val) {
+        R_UNLESS(val <= 3, pm::ResultUnknown7());
+        g_unknown = val;
+        R_SUCCEED();
     }
 
 }

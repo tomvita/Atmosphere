@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -28,6 +28,7 @@ namespace ams::kern {
     constexpr inline size_t KTraceBufferSize = IsKTraceEnabled ? 16_MB : 0;
 
     static_assert(IsKTraceEnabled || !IsKTraceEnabled);
+    static_assert((IsKTraceEnabled) ^ (KTraceBufferSize == 0));
 
     class KTrace {
         public:

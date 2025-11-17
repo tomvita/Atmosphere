@@ -14,11 +14,19 @@ SECTIONS
 	/* =========== CODE section =========== */
 	PROVIDE(__start__ = 0x0);
 	. = __start__;
+    __bin_start__ = .;
 	__code_start = . ;
 
-	.crt0 :
+	.start :
 	{
-		KEEP (*(.crt0 .crt0.*))
+		KEEP (*(.start .start.*))
+		. = ALIGN(8);
+	} :code
+
+	/* .sleep. */
+    .sleep :
+	{
+		KEEP( *(.sleep .sleep.*) )
 		. = ALIGN(8);
 	} :code
 
@@ -54,24 +62,21 @@ SECTIONS
 	/* .vectors. */
 	. = ALIGN(2K);
 	__vectors_start__ = . ;
-  .vectors :
+    .vectors :
 	{
 		KEEP( *(.vectors) )
-		. = ALIGN(8);
-	} :code
-
-	/* .sleep. */
-	. = ALIGN(4K);
-	__sleep_start__ = . ;
-  .sleep :
-	{
-		KEEP( *(.sleep .sleep.*) )
 		. = ALIGN(8);
 	} :code
 
 	/* =========== RODATA section =========== */
 	. = ALIGN(0x1000);
 	__rodata_start = . ;
+
+	.rodata.text.crt0 :
+	{
+		KEEP (*(.crt0 .crt0.*))
+		. = ALIGN(8);
+	} :code
 
 	.rodata :
 	{
@@ -113,15 +118,14 @@ SECTIONS
 	.gnu_extab        : ONLY_IF_RO { *(.gnu_extab*) } : rodata
 
 	.dynamic           : { *(.dynamic) } :rodata :dyn
-	.dynsym            : { *(.dynsym) } :rodata
-	.dynstr            : { *(.dynstr) } :rodata
-	.rela.dyn          : { *(.rela.*) } :rodata
 	.hash              : { *(.hash) } :rodata
 	.gnu.hash          : { *(.gnu.hash) } :rodata
 	.gnu.version       : { *(.gnu.version) } :rodata
 	.gnu.version_d     : { *(.gnu.version_d) } :rodata
 	.gnu.version_r     : { *(.gnu.version_r) } :rodata
 	.note.gnu.build-id : { *(.note.gnu.build-id) } :rodata
+
+    __rodata_end = .;
 
 	/* =========== DATA section =========== */
 	. = ALIGN(0x1000);
@@ -152,21 +156,24 @@ SECTIONS
 	{
 		*(.data .data.* .gnu.linkonce.d.*)
 		SORT(CONSTRUCTORS)
+        . = ALIGN(8);
 	} :data
 
 	__bss_start__ = .;
-	.bss ALIGN(8) :
-	{
-		*(.dynbss)
-		*(.bss .bss.* .gnu.linkonce.b.*)
-		*(COMMON)
-		. = ALIGN(8);
-	} : data
 
-	. = ALIGN(0x1000);
+    .rela.dyn : { *(.rela.*) } :data
+    .relr.dyn : { *(.relr.*) } :data
+
+    .bss ADDR(.rela.dyn) (NOLOAD) : {
+        *(.dynbss)
+        *(.bss .bss.* .gnu.linkonce.b.*)
+        *(COMMON)
+        . = ALIGN(0x1000);
+    }
 
 	__bss_end__ = .;
 
+    __bin_end__ = .;
 	__end__ = ABSOLUTE(.);
 
 	/* ==================
@@ -174,7 +181,7 @@ SECTIONS
 	   ================== */
 
 	/* Discard sections that difficult post-processing */
-	/DISCARD/ : { *(.group .comment .note .interp .fini_array .fini_array.*) }
+	/DISCARD/ : { *(.group .comment .note .interp .fini_array .fini_array.* .dynsym .dynstr) }
 
 	/* Stabs debugging sections. */
 	.stab          0 : { *(.stab) }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -41,23 +41,27 @@ namespace ams::crypto {
             };
             static constexpr size_t Asn1IdentifierSize = util::size(Asn1Identifier);
         private:
-            Impl impl;
+            Impl m_impl;
         public:
             Sha1Generator() { /* ... */ }
 
             void Initialize() {
-                this->impl.Initialize();
+                m_impl.Initialize();
             }
 
             void Update(const void *data, size_t size) {
-                this->impl.Update(data, size);
+                m_impl.Update(data, size);
             }
 
             void GetHash(void *dst, size_t size) {
-                this->impl.GetHash(dst, size);
+                m_impl.GetHash(dst, size);
             }
     };
 
-    void GenerateSha1Hash(void *dst, size_t dst_size, const void *src, size_t src_size);
+    void GenerateSha1(void *dst, size_t dst_size, const void *src, size_t src_size);
+
+    ALWAYS_INLINE void GenerateSha1Hash(void *dst, size_t dst_size, const void *src, size_t src_size) {
+        return GenerateSha1(dst, dst_size, src, src_size);
+    }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -22,9 +22,10 @@ namespace ams::mitm::fs {
 
     namespace {
 
-        os::Mutex g_cal0_access_mutex(false);
+        constinit os::SdkMutex g_cal0_access_mutex;
 
     }
+
     Result CalibrationBinaryStorage::Read(s64 offset, void *_buffer, size_t size) {
         /* Acquire exclusive calibration binary access. */
         std::scoped_lock lk(g_cal0_access_mutex);
@@ -36,7 +37,7 @@ namespace ams::mitm::fs {
         R_SUCCEED_IF(size == 0);
 
         /* Handle the blank region. */
-        if (this->read_blank) {
+        if (m_read_blank) {
             if (BlankStartOffset <= offset && offset < BlankEndOffset) {
                 const size_t blank_size = std::min(size, static_cast<size_t>(BlankEndOffset - offset));
                 mitm::ReadFromBlankCalibrationBinary(offset, buffer, blank_size);
@@ -74,7 +75,7 @@ namespace ams::mitm::fs {
         R_SUCCEED_IF(size == 0);
 
         /* Handle any remaining data. */
-        return Base::Read(offset, buffer, size);
+        R_RETURN(Base::Read(offset, buffer, size));
     }
 
     Result CalibrationBinaryStorage::Write(s64 offset, const void *_buffer, size_t size) {
@@ -88,10 +89,10 @@ namespace ams::mitm::fs {
         R_SUCCEED_IF(size == 0);
 
         /* Only allow writes if we should. */
-        R_UNLESS(this->allow_writes, fs::ResultUnsupportedOperation());
+        R_UNLESS(m_allow_writes, fs::ResultUnsupportedOperation());
 
         /* Handle the blank region. */
-        if (this->read_blank) {
+        if (m_read_blank) {
             if (BlankStartOffset <= offset && offset < BlankEndOffset) {
                 const size_t blank_size = std::min(size, static_cast<size_t>(BlankEndOffset - offset));
                 mitm::WriteToBlankCalibrationBinary(offset, buffer, blank_size);
@@ -129,7 +130,7 @@ namespace ams::mitm::fs {
         R_SUCCEED_IF(size == 0);
 
         /* Handle any remaining data. */
-        return Base::Write(offset, buffer, size);
+        R_RETURN(Base::Write(offset, buffer, size));
     }
 
 }

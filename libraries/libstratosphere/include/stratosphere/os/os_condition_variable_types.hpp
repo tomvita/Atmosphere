@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -30,6 +30,7 @@ namespace ams::os {
         union {
             s32 _arr[sizeof(impl::InternalConditionVariableStorage) / sizeof(s32)];
             impl::InternalConditionVariableStorage _storage;
+            impl::InternalConditionVariableStorageTypeForConstantInitialize _storage_for_constant_initialize;
         };
     };
     static_assert(std::is_trivial<ConditionVariableType>::value);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,12 +17,13 @@
 #pragma once
 #include <vapours/results/results_common.hpp>
 
-namespace ams::os {
+R_DEFINE_NAMESPACE_RESULT_MODULE(ams::os, 3);
 
-    R_DEFINE_NAMESPACE_RESULT_MODULE(3);
+namespace ams::os {
 
     R_DEFINE_ERROR_RESULT(Busy,                         4);
 
+    R_DEFINE_ERROR_RESULT(InvalidParameter,             7);
     R_DEFINE_ERROR_RESULT(OutOfMemory,                  8);
     R_DEFINE_ERROR_RESULT(OutOfResource,                9);
 
@@ -36,5 +37,13 @@ namespace ams::os {
     R_DEFINE_ERROR_RESULT(InvalidTransferMemorySize,  504);
     R_DEFINE_ERROR_RESULT(OutOfTransferMemory,        505);
     R_DEFINE_ERROR_RESULT(OutOfAddressSpace,          506);
+
+    R_DEFINE_ERROR_RESULT(SessionClosedForReceive,    510);
+    R_DEFINE_ERROR_RESULT(SessionClosedForReply,      511);
+    R_DEFINE_ERROR_RESULT(ReceiveListBroken,          512);
+    R_DEFINE_ERROR_RESULT(InvalidProcessMemory,       513);
+
+    R_DEFINE_ERROR_RESULT(NotImplemented, 1000);
+    R_DEFINE_ERROR_RESULT(NotSupported,   1001);
 
 }

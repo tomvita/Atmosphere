@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -23,11 +23,38 @@ namespace ams::kern::arch::arm64::cpu {
 
     namespace {
 
+        ALWAYS_INLINE void SetEventLocally() {
+            __asm__ __volatile__("sevl" ::: "memory");
+        }
+
+        ALWAYS_INLINE void WaitForEvent() {
+            __asm__ __volatile__("wfe" ::: "memory");
+        }
+
         class KScopedCoreMigrationDisable {
             public:
                 ALWAYS_INLINE KScopedCoreMigrationDisable() { GetCurrentThread().DisableCoreMigration(); }
 
                 ALWAYS_INLINE ~KScopedCoreMigrationDisable() { GetCurrentThread().EnableCoreMigration(); }
+        };
+
+        class KScopedCacheMaintenance {
+            private:
+                bool m_active;
+            public:
+                ALWAYS_INLINE KScopedCacheMaintenance() {
+                    __asm__ __volatile__("" ::: "memory");
+                    if (m_active = !GetCurrentThread().IsInCacheMaintenanceOperation(); m_active) {
+                        GetCurrentThread().SetInCacheMaintenanceOperation();
+                    }
+                }
+
+                ALWAYS_INLINE ~KScopedCacheMaintenance() {
+                    if (m_active) {
+                        GetCurrentThread().ClearInCacheMaintenanceOperation();
+                    }
+                    __asm__ __volatile__("" ::: "memory");
+                }
         };
 
         /* Nintendo registers a handler for a SGI on thread termination, but does not handle anything. */
@@ -44,41 +71,83 @@ namespace ams::kern::arch::arm64::cpu {
 
         class KPerformanceCounterInterruptHandler : public KInterruptHandler {
             private:
-                static inline KLightLock s_lock;
+                static constinit inline KLightLock s_lock;
             private:
-                u64 counter;
-                s32 which;
-                bool done;
+                u64 m_counter;
+                s32 m_which;
+                bool m_done;
             public:
-                constexpr KPerformanceCounterInterruptHandler() : KInterruptHandler(), counter(), which(), done() { /* ... */ }
+                constexpr KPerformanceCounterInterruptHandler() : KInterruptHandler(), m_counter(), m_which(), m_done() { /* ... */ }
 
                 static KLightLock &GetLock() { return s_lock; }
 
                 void Setup(s32 w) {
-                    this->done = false;
-                    this->which = w;
+                    m_done = false;
+                    m_which = w;
                 }
 
                 void Wait() {
-                    while (!this->done) {
+                    while (!m_done) {
                         cpu::Yield();
                     }
                 }
 
-                u64 GetCounter() const { return this->counter; }
+                u64 GetCounter() const { return m_counter; }
 
                 /* Nintendo misuses this per their own API, but it's functional. */
                 virtual KInterruptTask *OnInterrupt(s32 interrupt_id) override {
                     MESOSPHERE_UNUSED(interrupt_id);
 
-                    if (this->which < 0) {
-                        this->counter = cpu::GetCycleCounter();
+                    if (m_which < 0) {
+                        m_counter = cpu::GetCycleCounter();
                     } else {
-                        this->counter = cpu::GetPerformanceCounter(this->which);
+                        m_counter = cpu::GetPerformanceCounter(m_which);
                     }
-                    DataMemoryBarrier();
-                    this->done = true;
+                    DataMemoryBarrierInnerShareable();
+                    m_done = true;
                     return nullptr;
+                }
+        };
+
+        class KCoreBarrierInterruptHandler : public KInterruptHandler {
+            private:
+                util::Atomic<u64> m_target_cores;
+                KLightLock m_lock;
+            public:
+                constexpr KCoreBarrierInterruptHandler() : KInterruptHandler(), m_target_cores(0), m_lock() { /* ... */ }
+
+                virtual KInterruptTask *OnInterrupt(s32 interrupt_id) override {
+                    MESOSPHERE_UNUSED(interrupt_id);
+                    m_target_cores &= ~(1ul << GetCurrentCoreId());
+                    return nullptr;
+                }
+
+                void SynchronizeCores(u64 core_mask) {
+                    /* Acquire exclusive access to ourselves. */
+                    KScopedLightLock lk(m_lock);
+
+                    /* If necessary, force synchronization with other cores. */
+                    if (const u64 other_cores_mask = core_mask & ~(1ul << GetCurrentCoreId()); other_cores_mask != 0) {
+                        /* Send an interrupt to the other cores. */
+                        m_target_cores = other_cores_mask;
+                        cpu::DataSynchronizationBarrierInnerShareable();
+                        Kernel::GetInterruptManager().SendInterProcessorInterrupt(KInterruptName_CoreBarrier, other_cores_mask);
+
+                        /* Wait for all cores to acknowledge. */
+                        {
+                            u64 v;
+                            __asm__ __volatile__("ldaxr %[v], %[p]\n"
+                                                 "cbz %[v], 1f\n"
+                                                 "0:\n"
+                                                 "wfe\n"
+                                                 "ldaxr %[v], %[p]\n"
+                                                 "cbnz %[v], 0b\n"
+                                                 "1:\n"
+                                                 : [v]"=&r"(v)
+                                                 : [p]"Q"(*reinterpret_cast<u64 *>(std::addressof(m_target_cores)))
+                                                 : "memory");
+                        }
+                    }
                 }
         };
 
@@ -93,24 +162,24 @@ namespace ams::kern::arch::arm64::cpu {
                     FlushDataCache,
                 };
             private:
-                KLightLock lock;
-                KLightLock cv_lock;
-                KLightConditionVariable cv;
-                std::atomic<u64> target_cores;
-                volatile Operation operation;
+                KLightLock m_lock;
+                KLightLock m_cv_lock;
+                KLightConditionVariable m_cv;
+                util::Atomic<u64> m_target_cores;
+                volatile Operation m_operation;
             private:
                 static void ThreadFunction(uintptr_t _this) {
                     reinterpret_cast<KCacheHelperInterruptHandler *>(_this)->ThreadFunctionImpl();
                 }
 
                 void ThreadFunctionImpl() {
-                    const s32 core_id = GetCurrentCoreId();
+                    const u64 core_mask = (1ul << GetCurrentCoreId());
                     while (true) {
                         /* Wait for a request to come in. */
                         {
-                            KScopedLightLock lk(this->cv_lock);
-                            while ((this->target_cores & (1ul << core_id)) == 0) {
-                                this->cv.Wait(std::addressof(this->cv_lock));
+                            KScopedLightLock lk(m_cv_lock);
+                            while ((m_target_cores.Load() & core_mask) == 0) {
+                                m_cv.Wait(std::addressof(m_cv_lock));
                             }
                         }
 
@@ -119,9 +188,11 @@ namespace ams::kern::arch::arm64::cpu {
 
                         /* Broadcast, if there's nothing pending. */
                         {
-                            KScopedLightLock lk(this->cv_lock);
-                            if (this->target_cores == 0) {
-                                this->cv.Broadcast();
+                            KScopedLightLock lk(m_cv_lock);
+
+                            m_target_cores &= ~core_mask;
+                            if (m_target_cores.Load() == 0) {
+                                m_cv.Broadcast();
                             }
                         }
                     }
@@ -129,7 +200,7 @@ namespace ams::kern::arch::arm64::cpu {
 
                 void ProcessOperation();
             public:
-                constexpr KCacheHelperInterruptHandler() : KInterruptHandler(), lock(), cv_lock(), cv(), target_cores(), operation(Operation::Idle) { /* ... */ }
+                constexpr KCacheHelperInterruptHandler() : KInterruptHandler(), m_lock(), m_cv_lock(), m_cv(util::ConstantInitialize), m_target_cores(0), m_operation(Operation::Idle) { /* ... */ }
 
                 void Initialize(s32 core_id) {
                     /* Reserve a thread from the system limit. */
@@ -144,17 +215,18 @@ namespace ams::kern::arch::arm64::cpu {
                     KThread::Register(new_thread);
 
                     /* Run the thread. */
-                    new_thread->Run();
+                    MESOSPHERE_R_ABORT_UNLESS(new_thread->Run());
                 }
 
                 virtual KInterruptTask *OnInterrupt(s32 interrupt_id) override {
                     MESOSPHERE_UNUSED(interrupt_id);
                     this->ProcessOperation();
+                    m_target_cores &= ~(1ul << GetCurrentCoreId());
                     return nullptr;
                 }
 
                 void RequestOperation(Operation op) {
-                    KScopedLightLock lk(this->lock);
+                    KScopedLightLock lk(m_lock);
 
                     /* Create core masks for us to use. */
                     constexpr u64 AllCoresMask = (1ul << cpu::NumCores) - 1ul;
@@ -162,78 +234,88 @@ namespace ams::kern::arch::arm64::cpu {
 
                     if ((op == Operation::InstructionMemoryBarrier) || (Kernel::GetState() == Kernel::State::Initializing)) {
                         /* Check that there's no on-going operation. */
-                        MESOSPHERE_ABORT_UNLESS(this->operation == Operation::Idle);
-                        MESOSPHERE_ABORT_UNLESS(this->target_cores == 0);
+                        MESOSPHERE_ABORT_UNLESS(m_operation == Operation::Idle);
+                        MESOSPHERE_ABORT_UNLESS(m_target_cores.Load() == 0);
 
                         /* Set operation. */
-                        this->operation = op;
+                        m_operation = op;
 
                         /* For certain operations, we want to send an interrupt. */
-                        this->target_cores = other_cores_mask;
+                        m_target_cores = other_cores_mask;
 
-                        const u64 target_mask = this->target_cores;
-                        DataSynchronizationBarrier();
+                        const u64 target_mask = m_target_cores.Load();
+
+                        DataSynchronizationBarrierInnerShareable();
                         Kernel::GetInterruptManager().SendInterProcessorInterrupt(KInterruptName_CacheOperation, target_mask);
 
                         this->ProcessOperation();
-                        while (this->target_cores != 0) {
+                        while (m_target_cores.Load() != 0) {
                             cpu::Yield();
                         }
 
                         /* Go idle again. */
-                        this->operation = Operation::Idle;
+                        m_operation = Operation::Idle;
                     } else {
                         /* Lock condvar so that we can send and wait for acknowledgement of request. */
-                        KScopedLightLock cv_lk(this->cv_lock);
+                        KScopedLightLock cv_lk(m_cv_lock);
 
                         /* Check that there's no on-going operation. */
-                        MESOSPHERE_ABORT_UNLESS(this->operation == Operation::Idle);
-                        MESOSPHERE_ABORT_UNLESS(this->target_cores == 0);
+                        MESOSPHERE_ABORT_UNLESS(m_operation == Operation::Idle);
+                        MESOSPHERE_ABORT_UNLESS(m_target_cores.Load() == 0);
 
                         /* Set operation. */
-                        this->operation = op;
+                        m_operation = op;
 
                         /* Request all cores. */
-                        this->target_cores = AllCoresMask;
+                        m_target_cores = AllCoresMask;
 
                         /* Use the condvar. */
-                        this->cv.Broadcast();
-                        while (this->target_cores != 0) {
-                            this->cv.Wait(std::addressof(this->cv_lock));
+                        m_cv.Broadcast();
+                        while (m_target_cores.Load() != 0) {
+                            m_cv.Wait(std::addressof(m_cv_lock));
                         }
 
                         /* Go idle again. */
-                        this->operation = Operation::Idle;
+                        m_operation = Operation::Idle;
                     }
                 }
         };
 
         /* Instances of the interrupt handlers. */
-        KThreadTerminationInterruptHandler  g_thread_termination_handler;
-        KCacheHelperInterruptHandler        g_cache_operation_handler;
-        KPerformanceCounterInterruptHandler g_performance_counter_handler[cpu::NumCores];
+        constinit KThreadTerminationInterruptHandler  g_thread_termination_handler;
+        constinit KCacheHelperInterruptHandler        g_cache_operation_handler;
+        constinit KCoreBarrierInterruptHandler        g_core_barrier_handler;
+
+        #if defined(MESOSPHERE_ENABLE_PERFORMANCE_COUNTER)
+        constinit KPerformanceCounterInterruptHandler g_performance_counter_handler[cpu::NumCores];
+        #endif
 
         /* Expose this as a global, for asm to use. */
-        s32 g_all_core_sync_count;
+        constinit s32 g_all_core_sync_count;
 
-        template<bool Init, typename F>
+        template<typename F>
         ALWAYS_INLINE void PerformCacheOperationBySetWayImpl(int level, F f) {
             /* Used in multiple locations. */
             const u64 level_sel_value = static_cast<u64>(level << 1);
 
+            /* Get the cache size id register value with interrupts disabled. */
             u64 ccsidr_value;
-            if constexpr (Init) {
-                /* During init, we can just set the selection register directly. */
-                cpu::SetCsselrEl1(level_sel_value);
-                cpu::InstructionMemoryBarrier();
-                ccsidr_value = cpu::GetCcsidrEl1();
-            } else {
-                /* After init, we need to care about interrupts. */
+            {
+                /* Disable interrupts. */
                 KScopedInterruptDisable di;
+
+                /* Configure the cache select register for our level. */
                 cpu::SetCsselrEl1(level_sel_value);
+
+                /* Ensure our configuration takes before reading the cache size id register. */
                 cpu::InstructionMemoryBarrier();
+
+                /* Get the cache size id register. */
                 ccsidr_value = cpu::GetCcsidrEl1();
             }
+
+            /* Ensure that no memory inconsistencies occur between cache management invocations. */
+            cpu::DataSynchronizationBarrier();
 
             /* Get cache size id info. */
             CacheSizeIdRegisterAccessor ccsidr_el1(ccsidr_value);
@@ -261,53 +343,30 @@ namespace ams::kern::arch::arm64::cpu {
             __asm__ __volatile__("dc csw, %[v]" :: [v]"r"(sw_value) : "memory");
         }
 
-        template<bool Init, typename F>
-        ALWAYS_INLINE void PerformCacheOperationBySetWayShared(F f) {
-            CacheLineIdRegisterAccessor clidr_el1;
-            const int levels_of_coherency   = clidr_el1.GetLevelsOfCoherency();
-            const int levels_of_unification = clidr_el1.GetLevelsOfUnification();
-
-            for (int level = levels_of_coherency; level >= levels_of_unification; level--) {
-                PerformCacheOperationBySetWayImpl<Init>(level, f);
-            }
+        void StoreDataCacheBySetWay(int level) {
+            PerformCacheOperationBySetWayImpl(level, StoreDataCacheLineBySetWayImpl);
         }
 
-        template<bool Init, typename F>
-        ALWAYS_INLINE void PerformCacheOperationBySetWayLocal(F f) {
-            CacheLineIdRegisterAccessor clidr_el1;
-            const int levels_of_unification = clidr_el1.GetLevelsOfUnification();
-
-            for (int level = levels_of_unification - 1; level >= 0; level--) {
-                PerformCacheOperationBySetWayImpl<Init>(level, f);
-            }
+        void FlushDataCacheBySetWay(int level) {
+            PerformCacheOperationBySetWayImpl(level, FlushDataCacheLineBySetWayImpl);
         }
 
         void KCacheHelperInterruptHandler::ProcessOperation() {
-            switch (this->operation) {
+            switch (m_operation) {
                 case Operation::Idle:
                     break;
                 case Operation::InstructionMemoryBarrier:
                     InstructionMemoryBarrier();
                     break;
                 case Operation::StoreDataCache:
-                    PerformCacheOperationBySetWayLocal<false>(StoreDataCacheLineBySetWayImpl);
-                    DataSynchronizationBarrier();
+                    StoreDataCacheBySetWay(0);
+                    cpu::DataSynchronizationBarrier();
                     break;
                 case Operation::FlushDataCache:
-                    PerformCacheOperationBySetWayLocal<false>(FlushDataCacheLineBySetWayImpl);
-                    DataSynchronizationBarrier();
+                    FlushDataCacheBySetWay(0);
+                    cpu::DataSynchronizationBarrier();
                     break;
             }
-
-            this->target_cores &= ~(1ul << GetCurrentCoreId());
-        }
-
-        ALWAYS_INLINE void SetEventLocally() {
-            __asm__ __volatile__("sevl" ::: "memory");
-        }
-
-        ALWAYS_INLINE void WaitForEvent() {
-            __asm__ __volatile__("wfe" ::: "memory");
         }
 
         ALWAYS_INLINE Result InvalidateDataCacheRange(uintptr_t start, uintptr_t end) {
@@ -315,7 +374,7 @@ namespace ams::kern::arch::arm64::cpu {
             MESOSPHERE_ASSERT(util::IsAligned(end,   DataCacheLineSize));
             R_UNLESS(UserspaceAccess::InvalidateDataCache(start, end), svc::ResultInvalidCurrentMemory());
             DataSynchronizationBarrier();
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         ALWAYS_INLINE Result StoreDataCacheRange(uintptr_t start, uintptr_t end) {
@@ -323,7 +382,7 @@ namespace ams::kern::arch::arm64::cpu {
             MESOSPHERE_ASSERT(util::IsAligned(end,   DataCacheLineSize));
             R_UNLESS(UserspaceAccess::StoreDataCache(start, end), svc::ResultInvalidCurrentMemory());
             DataSynchronizationBarrier();
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         ALWAYS_INLINE Result FlushDataCacheRange(uintptr_t start, uintptr_t end) {
@@ -331,15 +390,7 @@ namespace ams::kern::arch::arm64::cpu {
             MESOSPHERE_ASSERT(util::IsAligned(end,   DataCacheLineSize));
             R_UNLESS(UserspaceAccess::FlushDataCache(start, end), svc::ResultInvalidCurrentMemory());
             DataSynchronizationBarrier();
-            return ResultSuccess();
-        }
-
-        ALWAYS_INLINE Result InvalidateInstructionCacheRange(uintptr_t start, uintptr_t end) {
-            MESOSPHERE_ASSERT(util::IsAligned(start, InstructionCacheLineSize));
-            MESOSPHERE_ASSERT(util::IsAligned(end,   InstructionCacheLineSize));
-            R_UNLESS(UserspaceAccess::InvalidateInstructionCache(start, end), svc::ResultInvalidCurrentMemory());
-            EnsureInstructionConsistency();
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         ALWAYS_INLINE void InvalidateEntireInstructionCacheLocalImpl() {
@@ -352,32 +403,53 @@ namespace ams::kern::arch::arm64::cpu {
 
     }
 
-    void FlushEntireDataCacheSharedForInit() {
-        return PerformCacheOperationBySetWayShared<true>(FlushDataCacheLineBySetWayImpl);
+    void SynchronizeCores(u64 core_mask) {
+        /* Request a core barrier interrupt. */
+        g_core_barrier_handler.SynchronizeCores(core_mask);
     }
 
-    void FlushEntireDataCacheLocalForInit() {
-        return PerformCacheOperationBySetWayLocal<true>(FlushDataCacheLineBySetWayImpl);
-    }
+    void StoreCacheForInit(void *addr, size_t size) {
+        /* Store the data cache for the specified range. */
+        const uintptr_t start = util::AlignDown(reinterpret_cast<uintptr_t>(addr), DataCacheLineSize);
+        const uintptr_t end   = start + size;
+        for (uintptr_t cur = start; cur < end; cur += DataCacheLineSize) {
+            __asm__ __volatile__("dc cvac, %[cur]" :: [cur]"r"(cur) : "memory");
+        }
 
-    void InvalidateEntireInstructionCacheForInit() {
+        /* Data synchronization barrier. */
+        DataSynchronizationBarrierInnerShareable();
+
+        /* Invalidate instruction cache. */
         InvalidateEntireInstructionCacheLocalImpl();
+
+        /* Ensure local instruction consistency. */
         EnsureInstructionConsistency();
     }
 
-    void StoreEntireCacheForInit() {
-        PerformCacheOperationBySetWayLocal<true>(StoreDataCacheLineBySetWayImpl);
-        PerformCacheOperationBySetWayShared<true>(StoreDataCacheLineBySetWayImpl);
-        DataSynchronizationBarrierInnerShareable();
-        InvalidateEntireInstructionCacheForInit();
-    }
-
     void FlushEntireDataCache() {
-        return PerformCacheOperationBySetWayShared<false>(FlushDataCacheLineBySetWayImpl);
+        KScopedCoreMigrationDisable dm;
+
+        CacheLineIdRegisterAccessor clidr_el1;
+        const int levels_of_coherency   = clidr_el1.GetLevelsOfCoherency();
+
+        /* Store cache from L2 up to the level of coherence (if there's an L3 cache or greater). */
+        for (int level = 2; level < levels_of_coherency; ++level) {
+            StoreDataCacheBySetWay(level - 1);
+        }
+
+        /* Flush cache from the level of coherence down to L2. */
+        for (int level = levels_of_coherency; level > 1; --level) {
+            FlushDataCacheBySetWay(level - 1);
+        }
+
+        /* Data synchronization barrier for full system. */
+        DataSynchronizationBarrier();
     }
 
     Result InvalidateDataCache(void *addr, size_t size) {
-        KScopedCoreMigrationDisable dm;
+        /* Mark ourselves as in a cache maintenance operation, and prevent re-ordering. */
+        KScopedCacheMaintenance cm;
+
         const uintptr_t start = reinterpret_cast<uintptr_t>(addr);
         const uintptr_t end   = start + size;
         uintptr_t aligned_start = util::AlignDown(start, DataCacheLineSize);
@@ -397,36 +469,27 @@ namespace ams::kern::arch::arm64::cpu {
             R_TRY(InvalidateDataCacheRange(aligned_start, aligned_end));
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result StoreDataCache(const void *addr, size_t size) {
-        KScopedCoreMigrationDisable dm;
+        /* Mark ourselves as in a cache maintenance operation, and prevent re-ordering. */
+        KScopedCacheMaintenance cm;
+
         const uintptr_t start = util::AlignDown(reinterpret_cast<uintptr_t>(addr),        DataCacheLineSize);
         const uintptr_t end   = util::AlignUp(  reinterpret_cast<uintptr_t>(addr) + size, DataCacheLineSize);
 
-        return StoreDataCacheRange(start, end);
+        R_RETURN(StoreDataCacheRange(start, end));
     }
 
     Result FlushDataCache(const void *addr, size_t size) {
-        KScopedCoreMigrationDisable dm;
+        /* Mark ourselves as in a cache maintenance operation, and prevent re-ordering. */
+        KScopedCacheMaintenance cm;
+
         const uintptr_t start = util::AlignDown(reinterpret_cast<uintptr_t>(addr),        DataCacheLineSize);
         const uintptr_t end   = util::AlignUp(  reinterpret_cast<uintptr_t>(addr) + size, DataCacheLineSize);
 
-        return FlushDataCacheRange(start, end);
-    }
-
-    Result InvalidateInstructionCache(void *addr, size_t size) {
-        KScopedCoreMigrationDisable dm;
-        const uintptr_t start = util::AlignDown(reinterpret_cast<uintptr_t>(addr),        InstructionCacheLineSize);
-        const uintptr_t end   = util::AlignUp(  reinterpret_cast<uintptr_t>(addr) + size, InstructionCacheLineSize);
-
-        R_TRY(InvalidateInstructionCacheRange(start, end));
-
-        /* Request the interrupt helper to perform an instruction memory barrier. */
-        g_cache_operation_handler.RequestOperation(KCacheHelperInterruptHandler::Operation::InstructionMemoryBarrier);
-
-        return ResultSuccess();
+        R_RETURN(FlushDataCacheRange(start, end));
     }
 
     void InvalidateEntireInstructionCache() {
@@ -445,11 +508,17 @@ namespace ams::kern::arch::arm64::cpu {
         g_cache_operation_handler.Initialize(core_id);
 
         /* Bind all handlers to the relevant interrupts. */
-        Kernel::GetInterruptManager().BindHandler(std::addressof(g_cache_operation_handler),              KInterruptName_CacheOperation,     core_id, KInterruptController::PriorityLevel_High,      false, false);
-        Kernel::GetInterruptManager().BindHandler(std::addressof(g_thread_termination_handler),           KInterruptName_ThreadTerminate,    core_id, KInterruptController::PriorityLevel_Scheduler, false, false);
+        MESOSPHERE_R_ABORT_UNLESS(Kernel::GetInterruptManager().BindHandler(std::addressof(g_cache_operation_handler),              KInterruptName_CacheOperation,     core_id, KInterruptController::PriorityLevel_High,      false, false));
+        MESOSPHERE_R_ABORT_UNLESS(Kernel::GetInterruptManager().BindHandler(std::addressof(g_thread_termination_handler),           KInterruptName_ThreadTerminate,    core_id, KInterruptController::PriorityLevel_Scheduler, false, false));
+        MESOSPHERE_R_ABORT_UNLESS(Kernel::GetInterruptManager().BindHandler(std::addressof(g_core_barrier_handler),                 KInterruptName_CoreBarrier,        core_id, KInterruptController::PriorityLevel_Scheduler, false, false));
 
+        /* If we should, enable user access to the performance counter registers. */
         if (KTargetSystem::IsUserPmuAccessEnabled()) { SetPmUserEnrEl0(1ul); }
-        Kernel::GetInterruptManager().BindHandler(std::addressof(g_performance_counter_handler[core_id]), KInterruptName_PerformanceCounter, core_id, KInterruptController::PriorityLevel_Timer,     false, false);
+
+        /* If we should, enable the kernel performance counter interrupt handler. */
+        #if defined(MESOSPHERE_ENABLE_PERFORMANCE_COUNTER)
+        MESOSPHERE_R_ABORT_UNLESS(Kernel::GetInterruptManager().BindHandler(std::addressof(g_performance_counter_handler[core_id]), KInterruptName_PerformanceCounter, core_id, KInterruptController::PriorityLevel_Timer,     false, false));
+        #endif
     }
 
     void SynchronizeAllCores() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,7 +18,7 @@
 
 namespace ams::erpt::srv {
 
-    JournalMeta JournalForMeta::s_journal_meta;
+    constinit JournalMeta JournalForMeta::s_journal_meta = {};
 
     void JournalForMeta::InitializeJournal() {
         std::memset(std::addressof(s_journal_meta), 0, sizeof(s_journal_meta));
@@ -27,7 +27,7 @@ namespace ams::erpt::srv {
     }
 
     Result JournalForMeta::CommitJournal(Stream *stream) {
-        return stream->WriteStream(reinterpret_cast<const u8 *>(std::addressof(s_journal_meta)), sizeof(s_journal_meta));
+        R_RETURN(stream->WriteStream(reinterpret_cast<const u8 *>(std::addressof(s_journal_meta)), sizeof(s_journal_meta)));
     }
 
     Result JournalForMeta::RestoreJournal(Stream *stream) {
@@ -35,7 +35,7 @@ namespace ams::erpt::srv {
         if (R_FAILED(stream->ReadStream(std::addressof(size), reinterpret_cast<u8 *>(std::addressof(s_journal_meta)), sizeof(s_journal_meta))) || size != sizeof(s_journal_meta)) {
             InitializeJournal();
         }
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     u32 JournalForMeta::GetTransmittedCount(ReportType type) {

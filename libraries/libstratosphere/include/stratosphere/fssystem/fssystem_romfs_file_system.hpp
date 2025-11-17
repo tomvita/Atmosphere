@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,26 +17,35 @@
 #include <vapours.hpp>
 #include <stratosphere/fs/fsa/fs_ifilesystem.hpp>
 #include <stratosphere/fs/impl/fs_newable.hpp>
-#include <stratosphere/fssystem/fssystem_dbm_hierarchical_rom_file_table.hpp>
+#include <stratosphere/fs/common/fs_dbm_hierarchical_rom_file_table.hpp>
 #include <stratosphere/fs/fs_istorage.hpp>
 
 namespace ams::fssystem {
 
+    /* ACCURATE_TO_VERSION: Unknown */
+
     class RomFsFileSystem : public fs::fsa::IFileSystem, public fs::impl::Newable {
         NON_COPYABLE(RomFsFileSystem);
         public:
-            using RomFileTable = HierarchicalRomFileTable<fs::IStorage, fs::IStorage, fs::IStorage, fs::IStorage>;
+            using RomFileTable = fs::HierarchicalRomFileTable;
         private:
-            RomFileTable rom_file_table;
-            fs::IStorage *base_storage;
-            std::shared_ptr<fs::IStorage> shared_storage;
-            std::unique_ptr<fs::IStorage> dir_bucket_storage;
-            std::unique_ptr<fs::IStorage> dir_entry_storage;
-            std::unique_ptr<fs::IStorage> file_bucket_storage;
-            std::unique_ptr<fs::IStorage> file_entry_storage;
-            s64 entry_size;
+            RomFileTable m_rom_file_table;
+            fs::IStorage *m_base_storage;
+            std::shared_ptr<fs::IStorage> m_shared_storage;
+            std::unique_ptr<fs::IStorage> m_dir_bucket_storage;
+            std::unique_ptr<fs::IStorage> m_dir_entry_storage;
+            std::unique_ptr<fs::IStorage> m_file_bucket_storage;
+            std::unique_ptr<fs::IStorage> m_file_entry_storage;
+            s64 m_entry_size;
         private:
             Result GetFileInfo(RomFileTable::FileInfo *out, const char *path);
+            Result GetFileInfo(RomFileTable::FileInfo *out, const fs::Path &path) {
+                R_RETURN(this->GetFileInfo(out, path.GetString()));
+            }
+
+            Result CheckPathFormat(const fs::Path &path) const {
+                R_RETURN(fs::PathFormatter::CheckPathFormat(path.GetString(), fs::PathFlags{}));
+            }
         public:
             static Result GetRequiredWorkingMemorySize(size_t *out, fs::IStorage *storage);
         public:
@@ -48,24 +57,24 @@ namespace ams::fssystem {
 
             fs::IStorage *GetBaseStorage();
             RomFileTable *GetRomFileTable();
-            Result GetFileBaseOffset(s64 *out, const char *path);
+            Result GetFileBaseOffset(s64 *out, const fs::Path &path);
         public:
-            virtual Result CreateFileImpl(const char *path, s64 size, int flags) override;
-            virtual Result DeleteFileImpl(const char *path) override;
-            virtual Result CreateDirectoryImpl(const char *path) override;
-            virtual Result DeleteDirectoryImpl(const char *path) override;
-            virtual Result DeleteDirectoryRecursivelyImpl(const char *path) override;
-            virtual Result RenameFileImpl(const char *old_path, const char *new_path) override;
-            virtual Result RenameDirectoryImpl(const char *old_path, const char *new_path) override;
-            virtual Result GetEntryTypeImpl(fs::DirectoryEntryType *out, const char *path) override;
-            virtual Result OpenFileImpl(std::unique_ptr<fs::fsa::IFile> *out_file, const char *path, fs::OpenMode mode) override;
-            virtual Result OpenDirectoryImpl(std::unique_ptr<fs::fsa::IDirectory> *out_dir, const char *path, fs::OpenDirectoryMode mode) override;
-            virtual Result CommitImpl() override;
-            virtual Result GetFreeSpaceSizeImpl(s64 *out, const char *path) override;
-            virtual Result CleanDirectoryRecursivelyImpl(const char *path) override;
+            virtual Result DoCreateFile(const fs::Path &path, s64 size, int flags) override;
+            virtual Result DoDeleteFile(const fs::Path &path) override;
+            virtual Result DoCreateDirectory(const fs::Path &path) override;
+            virtual Result DoDeleteDirectory(const fs::Path &path) override;
+            virtual Result DoDeleteDirectoryRecursively(const fs::Path &path) override;
+            virtual Result DoRenameFile(const fs::Path &old_path, const fs::Path &new_path) override;
+            virtual Result DoRenameDirectory(const fs::Path &old_path, const fs::Path &new_path) override;
+            virtual Result DoGetEntryType(fs::DirectoryEntryType *out, const fs::Path &path) override;
+            virtual Result DoOpenFile(std::unique_ptr<fs::fsa::IFile> *out_file, const fs::Path &path, fs::OpenMode mode) override;
+            virtual Result DoOpenDirectory(std::unique_ptr<fs::fsa::IDirectory> *out_dir, const fs::Path &path, fs::OpenDirectoryMode mode) override;
+            virtual Result DoCommit() override;
+            virtual Result DoGetFreeSpaceSize(s64 *out, const fs::Path &path) override;
+            virtual Result DoCleanDirectoryRecursively(const fs::Path &path) override;
 
             /* These aren't accessible as commands. */
-            virtual Result CommitProvisionallyImpl(s64 counter) override;
+            virtual Result DoCommitProvisionally(s64 counter) override;
     };
 
 }

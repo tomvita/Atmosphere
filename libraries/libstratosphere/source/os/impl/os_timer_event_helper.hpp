@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -24,7 +24,7 @@ namespace ams::os {
 
         TimeSpan SaturatedAdd(TimeSpan t1, TimeSpan t2);
         void StopTimerUnsafe(TimerEventType *event);
-        bool UpdateSignalStateAndRecalculateNextTimeToWakeupUnsafe(TimerEventType *event, TimeSpan cur_time);
+        bool UpdateSignalStateAndRecalcNextTimeToWakeupUnsafe(TimerEventType *event, TimeSpan cur_time);
 
     }
 

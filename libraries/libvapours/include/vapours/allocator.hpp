@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,7 +19,7 @@
 
 namespace ams {
 
-    constexpr inline size_t DefaultAlignment = alignof(max_align_t);
+    constexpr inline size_t DefaultAlignment = /*alignof(max_align_t)*/ 0x8;
 
     using AllocateFunction                    = void *(*)(size_t);
     using AllocateFunctionWithUserData        = void *(*)(size_t, void *);
@@ -49,6 +49,8 @@ namespace ams {
             ALWAYS_INLINE bool IsEqual(const MemoryResource &resource) const {
                 return this->IsEqualImpl(resource);
             }
+        public:
+            constexpr ~MemoryResource() = default;
         protected:
             virtual void *AllocateImpl(size_t size, size_t alignment) = 0;
             virtual void DeallocateImpl(void *buffer, size_t size, size_t alignment) = 0;

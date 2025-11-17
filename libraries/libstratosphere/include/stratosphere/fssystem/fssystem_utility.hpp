@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -14,52 +14,50 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #pragma once
-#include "../fs/fs_common.hpp"
-#include "../fs/fs_file.hpp"
-#include "../fs/fs_directory.hpp"
-#include "../fs/fs_filesystem.hpp"
-#include "fssystem_path_tool.hpp"
+#include <stratosphere/fs/fs_common.hpp>
+#include <stratosphere/fs/fs_file.hpp>
+#include <stratosphere/fs/fs_directory.hpp>
+#include <stratosphere/fs/fs_filesystem.hpp>
+#include <stratosphere/fs/fs_path.hpp>
 
 namespace ams::fssystem {
 
+    /* ACCURATE_TO_VERSION: 13.4.0.0 */
+
     namespace impl {
 
+        template<typename F>
+        concept IterateDirectoryHandler = requires (F f, const fs::Path &path, const fs::DirectoryEntry &entry) {
+            { f(path, entry) } -> std::convertible_to<::ams::Result>;
+        };
+
         /* Iteration. */
-        template<typename OnEnterDir, typename OnExitDir, typename OnFile>
-        Result IterateDirectoryRecursivelyImpl(fs::fsa::IFileSystem *fs, char *work_path, size_t work_path_size, fs::DirectoryEntry *dir_ent, OnEnterDir on_enter_dir, OnExitDir on_exit_dir, OnFile on_file) {
+        template<IterateDirectoryHandler OnEnterDir, IterateDirectoryHandler OnExitDir, IterateDirectoryHandler OnFile>
+        Result IterateDirectoryRecursivelyImpl(fs::fsa::IFileSystem *fs, fs::Path &work_path, fs::DirectoryEntry *dir_ent, OnEnterDir on_enter_dir, OnExitDir on_exit_dir, OnFile on_file) {
             /* Open the directory. */
             std::unique_ptr<fs::fsa::IDirectory> dir;
-            R_TRY(fs->OpenDirectory(&dir, work_path, fs::OpenDirectoryMode_All));
-
-            const size_t parent_len = strnlen(work_path, work_path_size - 1);
+            R_TRY(fs->OpenDirectory(std::addressof(dir), work_path, fs::OpenDirectoryMode_All));
 
             /* Read and handle entries. */
             while (true) {
                 /* Read a single entry. */
                 s64 read_count = 0;
-                R_TRY(dir->Read(&read_count, dir_ent, 1));
+                R_TRY(dir->Read(std::addressof(read_count), dir_ent, 1));
 
                 /* If we're out of entries, we're done. */
                 if (read_count == 0) {
                     break;
                 }
 
-                /* Validate child path size. */
-                const size_t child_name_len = strnlen(dir_ent->name, sizeof(dir_ent->name) - 1);
-                const bool is_dir = dir_ent->type == fs::DirectoryEntryType_Directory;
-                const size_t separator_size = is_dir ? 1 : 0;
-                R_UNLESS(parent_len + child_name_len + separator_size < work_path_size, fs::ResultTooLongPath());
-
-                /* Set child path. */
-                std::strncat(work_path, dir_ent->name, work_path_size - parent_len - 1);
+                /* Append child path. */
+                R_TRY(work_path.AppendChild(dir_ent->name));
                 {
-                    if (is_dir) {
+                    if (dir_ent->type == fs::DirectoryEntryType_Directory) {
                         /* Enter directory. */
                         R_TRY(on_enter_dir(work_path, *dir_ent));
 
-                        /* Append separator, recurse. */
-                        std::strncat(work_path, "/", work_path_size - (parent_len + child_name_len) - 1);
-                        R_TRY(IterateDirectoryRecursivelyImpl(fs, work_path, work_path_size, dir_ent, on_enter_dir, on_exit_dir, on_file));
+                        /* Recurse. */
+                        R_TRY(IterateDirectoryRecursivelyImpl(fs, work_path, dir_ent, on_enter_dir, on_exit_dir, on_file));
 
                         /* Exit directory. */
                         R_TRY(on_exit_dir(work_path, *dir_ent));
@@ -68,12 +66,10 @@ namespace ams::fssystem {
                         R_TRY(on_file(work_path, *dir_ent));
                     }
                 }
-
-                /* Restore parent path. */
-                work_path[parent_len] = StringTraits::NullTerminator;
+                R_TRY(work_path.RemoveChild());
             }
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         /* TODO: Cleanup. */
@@ -81,56 +77,65 @@ namespace ams::fssystem {
     }
 
     /* Iteration API */
-    template<typename OnEnterDir, typename OnExitDir, typename OnFile>
-    Result IterateDirectoryRecursively(fs::fsa::IFileSystem *fs, const char *root_path, char *work_path, size_t work_path_size, fs::DirectoryEntry *dir_ent_buf, OnEnterDir on_enter_dir, OnExitDir on_exit_dir, OnFile on_file) {
-        AMS_ABORT_UNLESS(work_path_size >= fs::EntryNameLengthMax + 1);
+    template<impl::IterateDirectoryHandler OnEnterDir, impl::IterateDirectoryHandler OnExitDir, impl::IterateDirectoryHandler OnFile>
+    Result IterateDirectoryRecursively(fs::fsa::IFileSystem *fs, const fs::Path &root_path, fs::DirectoryEntry *dir_ent_buf, OnEnterDir on_enter_dir, OnExitDir on_exit_dir, OnFile on_file) {
+        /* Create work path from the root path. */
+        fs::Path work_path;
+        R_TRY(work_path.Initialize(root_path));
 
-        /* Get size of the root path. */
-        size_t root_path_len = strnlen(root_path, fs::EntryNameLengthMax + 1);
-        R_UNLESS(root_path_len <= fs::EntryNameLengthMax, fs::ResultTooLongPath());
-
-        /* Copy root path in, add a / if necessary. */
-        std::memcpy(work_path, root_path, root_path_len);
-        if (!PathTool::IsSeparator(work_path[root_path_len - 1])) {
-            work_path[root_path_len++] = StringTraits::DirectorySeparator;
-        }
-
-        /* Make sure the result path is still valid. */
-        R_UNLESS(root_path_len <= fs::EntryNameLengthMax, fs::ResultTooLongPath());
-        work_path[root_path_len] = StringTraits::NullTerminator;
-
-        return impl::IterateDirectoryRecursivelyImpl(fs, work_path, work_path_size, dir_ent_buf, on_enter_dir, on_exit_dir, on_file);
+        R_RETURN(impl::IterateDirectoryRecursivelyImpl(fs, work_path, dir_ent_buf, on_enter_dir, on_exit_dir, on_file));
     }
 
-    template<typename OnEnterDir, typename OnExitDir, typename OnFile>
-    Result IterateDirectoryRecursively(fs::fsa::IFileSystem *fs, const char *root_path, OnEnterDir on_enter_dir, OnExitDir on_exit_dir, OnFile on_file) {
+    template<impl::IterateDirectoryHandler OnEnterDir, impl::IterateDirectoryHandler OnExitDir, impl::IterateDirectoryHandler OnFile>
+    Result IterateDirectoryRecursively(fs::fsa::IFileSystem *fs, const fs::Path &root_path, OnEnterDir on_enter_dir, OnExitDir on_exit_dir, OnFile on_file) {
         fs::DirectoryEntry dir_entry = {};
-        char work_path[fs::EntryNameLengthMax + 1] = {};
-        return IterateDirectoryRecursively(fs, root_path, work_path, sizeof(work_path), &dir_entry, on_enter_dir, on_exit_dir, on_file);
+        R_RETURN(IterateDirectoryRecursively(fs, root_path, std::addressof(dir_entry), on_enter_dir, on_exit_dir, on_file));
     }
 
-    template<typename OnEnterDir, typename OnExitDir, typename OnFile>
+    template<impl::IterateDirectoryHandler OnEnterDir, impl::IterateDirectoryHandler OnExitDir, impl::IterateDirectoryHandler OnFile>
     Result IterateDirectoryRecursively(fs::fsa::IFileSystem *fs, OnEnterDir on_enter_dir, OnExitDir on_exit_dir, OnFile on_file) {
-        return IterateDirectoryRecursively(fs, PathTool::RootPath, on_enter_dir, on_exit_dir, on_file);
+        R_RETURN(IterateDirectoryRecursively(fs, fs::MakeConstantPath("/"), on_enter_dir, on_exit_dir, on_file));
     }
 
     /* TODO: Cleanup API */
 
     /* Copy API. */
-    Result CopyFile(fs::fsa::IFileSystem *dst_fs, fs::fsa::IFileSystem *src_fs, const char *dst_parent_path, const char *src_path, const fs::DirectoryEntry *dir_ent, void *work_buf, size_t work_buf_size);
-    NX_INLINE Result CopyFile(fs::fsa::IFileSystem *fs, const char *dst_parent_path, const char *src_path, const fs::DirectoryEntry *dir_ent, void *work_buf, size_t work_buf_size) {
-        return CopyFile(fs, fs, dst_parent_path, src_path, dir_ent, work_buf, work_buf_size);
+    Result CopyFile(fs::fsa::IFileSystem *dst_fs, fs::fsa::IFileSystem *src_fs, const fs::Path &dst_path, const fs::Path &src_path, void *work_buf, size_t work_buf_size);
+
+    ALWAYS_INLINE Result CopyFile(fs::fsa::IFileSystem *fs, const fs::Path &dst_path, const fs::Path &src_path, void *work_buf, size_t work_buf_size) {
+        R_RETURN(CopyFile(fs, fs, dst_path, src_path, work_buf, work_buf_size));
     }
 
-    Result CopyDirectoryRecursively(fs::fsa::IFileSystem *dst_fs, fs::fsa::IFileSystem *src_fs, const char *dst_path, const char *src_path, void *work_buf, size_t work_buf_size);
-    NX_INLINE Result CopyDirectoryRecursively(fs::fsa::IFileSystem *fs, const char *dst_path, const char *src_path, void *work_buf, size_t work_buf_size) {
-        return CopyDirectoryRecursively(fs, fs, dst_path, src_path, work_buf, work_buf_size);
+    Result CopyDirectoryRecursively(fs::fsa::IFileSystem *dst_fs, fs::fsa::IFileSystem *src_fs, const fs::Path &dst_path, const fs::Path &src_path, fs::DirectoryEntry *entry, void *work_buf, size_t work_buf_size);
+
+    ALWAYS_INLINE Result CopyDirectoryRecursively(fs::fsa::IFileSystem *fs, const fs::Path &dst_path, const fs::Path &src_path, fs::DirectoryEntry *entry, void *work_buf, size_t work_buf_size) {
+        R_RETURN(CopyDirectoryRecursively(fs, fs, dst_path, src_path, entry, work_buf, work_buf_size));
     }
 
-    /* Semaphore adapter class. */
-    class SemaphoreAdapter : public os::Semaphore {
+    /* Locking utilities. */
+    class SemaphoreAdaptor : public os::Semaphore {
         public:
-            SemaphoreAdapter(int c, int mc) : os::Semaphore(c, mc) { /* ... */ }
+            SemaphoreAdaptor(int c, int mc) : os::Semaphore(c, mc) { /* ... */ }
+
+            bool TryLock(int *out_acquired, int count) {
+                AMS_ASSERT(count > 0);
+
+                for (auto i = 0; i < count; ++i) {
+                    if (!this->TryAcquire()) {
+                        *out_acquired = i;
+                        return false;
+                    }
+                }
+
+                *out_acquired = count;
+                return true;
+            }
+
+            void Unlock(int count) {
+                if (count > 0) {
+                    this->Release(count);
+                }
+            }
 
             bool try_lock() {
                 return this->TryAcquire();
@@ -141,33 +146,105 @@ namespace ams::fssystem {
             }
     };
 
-    /* Other utility. */
-    Result HasFile(bool *out, fs::fsa::IFileSystem *fs, const char *path);
-    Result HasDirectory(bool *out, fs::fsa::IFileSystem *fs, const char *path);
+    Result TryAcquireCountSemaphore(util::unique_lock<SemaphoreAdaptor> *out, SemaphoreAdaptor *adaptor);
 
-    Result EnsureDirectoryRecursively(fs::fsa::IFileSystem *fs, const char *path);
-    Result EnsureParentDirectoryRecursively(fs::fsa::IFileSystem *fs, const char *path);
+    class IUniqueLock {
+        NON_COPYABLE(IUniqueLock);
+        NON_MOVEABLE(IUniqueLock);
+        public:
+            virtual ~IUniqueLock() { /* ... */ }
+    };
 
-    template<typename F>
-    NX_INLINE Result RetryFinitelyForTargetLocked(F f) {
-        /* Retry up to 10 times, 100ms between retries. */
-        constexpr s32 MaxRetryCount = 10;
-        constexpr u64 RetryWaitTime = 100'000'000ul;
+    template<typename T>
+    class UniqueLockWithPin final : public IUniqueLock, public ::ams::fs::impl::Newable {
+        private:
+            util::unique_lock<SemaphoreAdaptor> m_lock;
+            T m_pinned_object;
+        public:
+            UniqueLockWithPin(util::unique_lock<SemaphoreAdaptor> lock, T obj) : m_lock(std::move(lock)), m_pinned_object(std::move(obj)) { /* ... */ }
 
-        s32 remaining_retries = MaxRetryCount;
-        while (true) {
-            R_TRY_CATCH(f()) {
-                R_CATCH(fs::ResultTargetLocked) {
-                    R_UNLESS(remaining_retries > 0, fs::ResultTargetLocked());
+            virtual ~UniqueLockWithPin() override {
+                m_lock = {};
+            }
+    };
 
-                    remaining_retries--;
-                    svcSleepThread(RetryWaitTime);
-                    continue;
+    template<typename T>
+    class MultiLockWithPin final : public IUniqueLock, public ::ams::fs::impl::Newable {
+        private:
+            T m_pinned_object;
+            SemaphoreAdaptor *m_semaphore_adaptor;
+            int m_lock_count;
+        public:
+            MultiLockWithPin(T obj, SemaphoreAdaptor *adaptor) : m_pinned_object(std::move(obj)), m_semaphore_adaptor(adaptor), m_lock_count(0) {
+                /* ... */
+            }
+
+            virtual ~MultiLockWithPin() override {
+                if (m_lock_count > 0) {
+                    m_semaphore_adaptor->Unlock(m_lock_count);
                 }
-            } R_END_TRY_CATCH;
+            }
 
-            return ResultSuccess();
+            Result Lock(int count) {
+                AMS_ASSERT(m_lock_count == 0);
+
+                R_UNLESS(m_semaphore_adaptor->TryLock(std::addressof(m_lock_count), count), fs::ResultOpenCountLimit());
+
+                R_SUCCEED();
+            }
+    };
+
+    template<typename T>
+    Result MakeUniqueLockWithPin(std::unique_ptr<IUniqueLock> *out, SemaphoreAdaptor *adaptor, T obj) {
+        /* Create the semaphore unique lock. */
+        util::unique_lock<SemaphoreAdaptor> sema_lock;
+        R_TRY(TryAcquireCountSemaphore(std::addressof(sema_lock), adaptor));
+
+        /* Create the output unique lock. */
+        auto result_lock = std::unique_ptr<UniqueLockWithPin<T>>(new UniqueLockWithPin<T>(std::move(sema_lock), std::move(obj)));
+        R_UNLESS(result_lock != nullptr, fs::ResultAllocationMemoryFailedNew());
+
+        /* Set the output. */
+        *out = std::move(result_lock);
+        R_SUCCEED();
+    }
+
+    template<typename T>
+    Result MakeUniqueLockWithPin(std::unique_ptr<IUniqueLock> *out, SemaphoreAdaptor *adaptor, int count, T obj) {
+        /* Create the output unique lock. */
+        auto result_lock = std::unique_ptr<MultiLockWithPin<T>>(new MultiLockWithPin<T>(std::move(obj), adaptor));
+        R_UNLESS(result_lock != nullptr, fs::ResultAllocationMemoryFailedNew());
+
+        /* Acquire the output lock. */
+        R_TRY(result_lock->Lock(count));
+
+        /* Set the output. */
+        *out = std::move(result_lock);
+        R_SUCCEED();
+    }
+
+    /* Other utility. */
+    Result HasFile(bool *out, fs::fsa::IFileSystem *fs, const fs::Path &path);
+    Result HasDirectory(bool *out, fs::fsa::IFileSystem *fs, const fs::Path &path);
+
+    Result EnsureDirectory(fs::fsa::IFileSystem *fs, const fs::Path &path);
+
+    template<s64 RetryMilliSeconds = 100, s32 MaxTryCount = 10>
+    ALWAYS_INLINE Result RetryFinitelyForTargetLocked(auto f) {
+        /* Retry sleeping between retries. */
+        constexpr TimeSpan RetryWaitTime = TimeSpan::FromMilliSeconds(RetryMilliSeconds);
+
+        Result result = f();
+        for (int i = 0; i < MaxTryCount && fs::ResultTargetLocked::Includes(result); ++i) {
+            os::SleepThread(RetryWaitTime);
+            result = f();
         }
+
+        R_RETURN(result);
+    }
+
+    ALWAYS_INLINE Result RetryToAvoidTargetLocked(auto f) {
+        R_RETURN((RetryFinitelyForTargetLocked<2, 25>(f)));
     }
 
     void AddCounter(void *counter, size_t counter_size, u64 value);

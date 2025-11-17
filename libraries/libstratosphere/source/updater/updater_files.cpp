@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -22,19 +22,19 @@ namespace ams::updater {
         /* Open the file. */
         fs::FileHandle file;
         R_TRY_CATCH(fs::OpenFile(std::addressof(file), path, fs::OpenMode_Read)) {
-            R_CONVERT(fs::ResultPathNotFound, ResultInvalidBootImagePackage())
+            R_CONVERT(fs::ResultPathNotFound, updater::ResultInvalidBootImagePackage())
         } R_END_TRY_CATCH;
         ON_SCOPE_EXIT { fs::CloseFile(file); };
 
         std::memset(dst, 0, dst_size);
-        return fs::ReadFile(out_size, file, 0, dst, dst_size, fs::ReadOption());
+        R_RETURN(fs::ReadFile(out_size, file, 0, dst, dst_size, fs::ReadOption()));
     }
 
     Result GetFileHash(size_t *out_size, void *dst_hash, const char *path, void *work_buffer, size_t work_buffer_size) {
         /* Open the file. */
         fs::FileHandle file;
         R_TRY_CATCH(fs::OpenFile(std::addressof(file), path, fs::OpenMode_Read)) {
-            R_CONVERT(fs::ResultPathNotFound, ResultInvalidBootImagePackage())
+            R_CONVERT(fs::ResultPathNotFound, updater::ResultInvalidBootImagePackage())
         } R_END_TRY_CATCH;
         ON_SCOPE_EXIT { fs::CloseFile(file); };
 
@@ -57,7 +57,7 @@ namespace ams::updater {
 
         generator.GetHash(dst_hash, crypto::Sha256Generator::HashSize);
         *out_size = total_size;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
 }

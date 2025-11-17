@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -20,6 +20,38 @@
 namespace ams::kern {
 
     class KAutoObject;
+
+    class KSystemResource;
+
+    #define FOR_EACH_K_CLASS_TOKEN_OBJECT_TYPE(HANDLER) \
+                HANDLER(KAutoObject)                    \
+                                                        \
+                HANDLER(KSynchronizationObject)         \
+                HANDLER(KReadableEvent)                 \
+                                                        \
+                HANDLER(KInterruptEvent)                \
+                HANDLER(KDebug)                         \
+                HANDLER(KThread)                        \
+                HANDLER(KServerPort)                    \
+                HANDLER(KServerSession)                 \
+                HANDLER(KClientPort)                    \
+                HANDLER(KClientSession)                 \
+                HANDLER(KProcess)                       \
+                HANDLER(KResourceLimit)                 \
+                HANDLER(KLightSession)                  \
+                HANDLER(KPort)                          \
+                HANDLER(KSession)                       \
+                HANDLER(KSharedMemory)                  \
+                HANDLER(KEvent)                         \
+                HANDLER(KLightClientSession)            \
+                HANDLER(KLightServerSession)            \
+                HANDLER(KTransferMemory)                \
+                HANDLER(KDeviceAddressSpace)            \
+                HANDLER(KSessionRequest)                \
+                HANDLER(KCodeMemory)                    \
+                HANDLER(KIoPool)                        \
+                HANDLER(KIoRegion)                      \
+                HANDLER(KSystemResource)
 
     class KClassTokenGenerator {
         public:
@@ -66,7 +98,7 @@ namespace ams::kern {
                 if constexpr (std::is_same<T, KAutoObject>::value) {
                     static_assert(T::ObjectType == ObjectType::KAutoObject);
                     return 0;
-                } else if constexpr (!std::is_final<T>::value) {
+                } else if constexpr (!std::is_final<T>::value && !std::same_as<T, KSystemResource>) {
                     static_assert(ObjectType::BaseClassesStart <= T::ObjectType && T::ObjectType < ObjectType::BaseClassesEnd);
                     constexpr auto ClassIndex = static_cast<TokenBaseType>(T::ObjectType) - static_cast<TokenBaseType>(ObjectType::BaseClassesStart);
                     return BaseClassToken<ClassIndex> | GetClassToken<typename T::BaseClass>();
@@ -104,16 +136,26 @@ namespace ams::kern {
                 KSession,
                 KSharedMemory,
                 KEvent,
-                KWritableEvent,
                 KLightClientSession,
                 KLightServerSession,
                 KTransferMemory,
                 KDeviceAddressSpace,
                 KSessionRequest,
                 KCodeMemory,
+                KIoPool,
+                KIoRegion,
+
+                /* NOTE: What occupies these gaps? They can be inferred, but they don't make sense. */
+                KAlpha,
+                KBeta,
+
+                KSystemResource,
+
+                FinalClassesLast,
 
                 FinalClassesEnd = FinalClassesStart + NumFinalClasses,
             };
+            static_assert(ObjectType::FinalClassesLast <= ObjectType::FinalClassesEnd);
 
             template<typename T>
             static constexpr inline TokenBaseType ClassToken = GetClassToken<T>();
@@ -123,5 +165,40 @@ namespace ams::kern {
 
     template<typename T>
     static constexpr inline ClassTokenType ClassToken = KClassTokenGenerator::ClassToken<T>;
+
+    namespace impl {
+
+        consteval bool IsKClassTokenGeneratorForEachMacroValid() {
+            auto IsObjectTypeIncludedByMacro = [](KClassTokenGenerator::ObjectType object_type) -> bool {
+                #define CLASS_TOKEN_HANDLER(CLASSNAME) if (object_type == KClassTokenGenerator::ObjectType::CLASSNAME) { return true; }
+                FOR_EACH_K_CLASS_TOKEN_OBJECT_TYPE(CLASS_TOKEN_HANDLER)
+                #undef CLASS_TOKEN_HANDLER
+                return false;
+            };
+
+            if (!IsObjectTypeIncludedByMacro(KClassTokenGenerator::ObjectType::KAutoObject)) {
+                return false;
+            }
+
+            for (auto base = util::ToUnderlying(KClassTokenGenerator::ObjectType::BaseClassesStart); base < util::ToUnderlying(KClassTokenGenerator::ObjectType::BaseClassesEnd); ++base) {
+                if (!IsObjectTypeIncludedByMacro(static_cast<KClassTokenGenerator::ObjectType>(base))) {
+                    return false;
+                }
+            }
+
+            for (auto fin = util::ToUnderlying(KClassTokenGenerator::ObjectType::FinalClassesStart); fin < util::ToUnderlying(KClassTokenGenerator::ObjectType::FinalClassesLast); ++fin) {
+                if (const auto o = static_cast<KClassTokenGenerator::ObjectType>(fin); !IsObjectTypeIncludedByMacro(o)) {
+                    if (o != KClassTokenGenerator::ObjectType::KAlpha && o != KClassTokenGenerator::ObjectType::KBeta) {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        static_assert(IsKClassTokenGeneratorForEachMacroValid());
+
+    }
 
 }

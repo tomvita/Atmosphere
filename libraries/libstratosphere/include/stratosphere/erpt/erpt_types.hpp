@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -34,7 +34,6 @@ namespace ams::erpt {
 
     enum CategoryId {
         AMS_ERPT_FOREACH_CATEGORY(GENERATE_ENUM)
-        CategoryId_Count,
     };
 
     #undef GENERATE_ENUM
@@ -43,7 +42,6 @@ namespace ams::erpt {
 
     enum FieldId {
         AMS_ERPT_FOREACH_FIELD(GENERATE_ENUM)
-        FieldId_Count,
     };
 
     #undef GENERATE_ENUM
@@ -110,6 +108,14 @@ namespace ams::erpt {
     using ReportFlagSet = util::BitFlagSet<BITSIZEOF(u32), ReportFlag>;
     static_assert(util::is_pod<ReportFlagSet>::value);
     static_assert(sizeof(ReportFlagSet) == sizeof(u32));
+
+    struct CreateReportOptionFlag {
+        using SubmitFsInfo = util::BitFlagSet<BITSIZEOF(u32), CreateReportOptionFlag>::Flag<0>;
+    };
+
+    using CreateReportOptionFlagSet = util::BitFlagSet<BITSIZEOF(u32), CreateReportOptionFlag>;
+    static_assert(util::is_pod<CreateReportOptionFlagSet>::value);
+    static_assert(sizeof(CreateReportOptionFlagSet) == sizeof(u32));
 
     struct ReportInfo {
         ReportType      type;
@@ -186,6 +192,12 @@ namespace ams::erpt {
                 u32 size;
             } value_array;
         };
+    };
+
+    struct CategoryEntry {
+        CategoryId category;
+        u32 field_count;
+        u32 array_buffer_count;
     };
 
     constexpr inline u32 FieldsPerContext = 20;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,33 +17,36 @@
 #pragma once
 #include <vapours/results/results_common.hpp>
 
+R_DEFINE_NAMESPACE_RESULT_MODULE(ams::ldr, 9);
+
 namespace ams::ldr {
 
-    R_DEFINE_NAMESPACE_RESULT_MODULE(9);
+    R_DEFINE_ERROR_RESULT(ArgumentOverflow,          1);
+    R_DEFINE_ERROR_RESULT(ArgumentCountOverflow,     2);
+    R_DEFINE_ERROR_RESULT(MetaOverflow,              3);
+    R_DEFINE_ERROR_RESULT(InvalidMeta,               4);
+    R_DEFINE_ERROR_RESULT(InvalidNso,                5);
+    R_DEFINE_ERROR_RESULT(InvalidPath,               6);
+    R_DEFINE_ERROR_RESULT(MaxProcess,                7);
+    R_DEFINE_ERROR_RESULT(NotPinned,                 8);
+    R_DEFINE_ERROR_RESULT(InvalidProgramId,          9);
+    R_DEFINE_ERROR_RESULT(InvalidVersion,           10);
+    R_DEFINE_ERROR_RESULT(InvalidAcidSignature,     11);
+    R_DEFINE_ERROR_RESULT(InvalidNcaSignature,      12);
 
-    R_DEFINE_ERROR_RESULT(TooLongArgument,       1);
-    R_DEFINE_ERROR_RESULT(TooManyArguments,      2);
-    R_DEFINE_ERROR_RESULT(TooLargeMeta,          3);
-    R_DEFINE_ERROR_RESULT(InvalidMeta,           4);
-    R_DEFINE_ERROR_RESULT(InvalidNso,            5);
-    R_DEFINE_ERROR_RESULT(InvalidPath,           6);
-    R_DEFINE_ERROR_RESULT(TooManyProcesses,      7);
-    R_DEFINE_ERROR_RESULT(NotPinned,             8);
-    R_DEFINE_ERROR_RESULT(InvalidProgramId,      9);
-    R_DEFINE_ERROR_RESULT(InvalidVersion,        10);
-    R_DEFINE_ERROR_RESULT(InvalidAcidSignature,  11);
-    R_DEFINE_ERROR_RESULT(InvalidNcaSignature,   12);
+    R_DEFINE_ERROR_RESULT(InvalidProgramAttributes, 14);
 
-    R_DEFINE_ERROR_RESULT(InsufficientAddressSpace,     51);
-    R_DEFINE_ERROR_RESULT(InvalidNro,                   52);
-    R_DEFINE_ERROR_RESULT(InvalidNrr,                   53);
-    R_DEFINE_ERROR_RESULT(InvalidSignature,             54);
-    R_DEFINE_ERROR_RESULT(InsufficientNroRegistrations, 55);
-    R_DEFINE_ERROR_RESULT(InsufficientNrrRegistrations, 56);
+    R_DEFINE_ERROR_RESULT(OutOfAddressSpace,            51);
+    R_DEFINE_ERROR_RESULT(InvalidNroImage,              52);
+    R_DEFINE_ERROR_RESULT(InvalidNrrImage,              53);
+    R_DEFINE_ERROR_RESULT(NotAuthorized,                54);
+    R_DEFINE_ERROR_RESULT(MaxModule,                    55);
+    R_DEFINE_ERROR_RESULT(MaxRegistration,              56);
     R_DEFINE_ERROR_RESULT(NroAlreadyLoaded,             57);
 
     R_DEFINE_ERROR_RESULT(InvalidAddress,        81);
     R_DEFINE_ERROR_RESULT(InvalidSize,           82);
+    R_DEFINE_ERROR_RESULT(InvalidCurrentMemory,  83);
     R_DEFINE_ERROR_RESULT(NotLoaded,             84);
     R_DEFINE_ERROR_RESULT(NotRegistered,         85);
     R_DEFINE_ERROR_RESULT(InvalidSession,        86);

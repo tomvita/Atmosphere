@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,6 +19,7 @@
 
 namespace ams::fs::impl {
 
+    /* ACCURATE_TO_VERSION: Unknown */
     constexpr inline u8 TlsIoPriorityMask      = 0x7;
     constexpr inline u8 TlsIoRecursiveCallMask = 0x8;
 

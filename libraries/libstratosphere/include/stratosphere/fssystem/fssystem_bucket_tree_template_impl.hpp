@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -20,6 +20,7 @@
 
 namespace ams::fssystem {
 
+    /* ACCURATE_TO_VERSION: 13.4.0.0 */
     template<typename EntryType>
     Result BucketTree::ScanContinuousReading(ContinuousReadingInfo *out_info, const ContinuousReadingParam<EntryType> &param) const {
         static_assert(util::is_pod<ContinuousReadingParam<EntryType>>::value);
@@ -27,7 +28,7 @@ namespace ams::fssystem {
         /* Validate our preconditions. */
         AMS_ASSERT(this->IsInitialized());
         AMS_ASSERT(out_info != nullptr);
-        AMS_ASSERT(this->entry_size == sizeof(EntryType));
+        AMS_ASSERT(m_entry_size == sizeof(EntryType));
 
         /* Reset the output. */
         out_info->Reset();
@@ -44,14 +45,19 @@ namespace ams::fssystem {
         R_UNLESS(entry.GetVirtualOffset() <= cur_offset, fs::ResultOutOfRange());
 
         /* Create a pooled buffer for our scan. */
-        PooledBuffer pool(this->node_size, 1);
+        PooledBuffer pool(m_node_size, 1);
         char *buffer = nullptr;
 
+        s64 entry_storage_size;
+        R_TRY(m_entry_storage.GetSize(std::addressof(entry_storage_size)));
+
         /* Read the node. */
-        if (this->node_size <= pool.GetSize()) {
+        if (m_node_size <= pool.GetSize()) {
             buffer = pool.GetBuffer();
-            const auto ofs = param.entry_set.index * static_cast<s64>(this->node_size);
-            R_TRY(this->entry_storage.Read(ofs, buffer, this->node_size));
+            const auto ofs = param.entry_set.index * static_cast<s64>(m_node_size);
+            R_UNLESS(m_node_size + ofs <= static_cast<size_t>(entry_storage_size), fs::ResultInvalidBucketTreeNodeEntryCount());
+
+            R_TRY(m_entry_storage.Read(ofs, buffer, m_node_size));
         }
 
         /* Calculate extents. */
@@ -59,9 +65,9 @@ namespace ams::fssystem {
         s64 phys_offset       = entry.GetPhysicalOffset();
 
         /* Start merge tracking. */
-        s64 merge_size = 0;
+        s64 merge_size    = 0;
         s64 readable_size = 0;
-        bool merged = false;
+        bool merged       = false;
 
         /* Iterate. */
         auto entry_index = param.entry_index;
@@ -81,15 +87,15 @@ namespace ams::fssystem {
 
             if (entry_index + 1 < entry_count) {
                 if (buffer != nullptr) {
-                    const auto ofs = impl::GetBucketTreeEntryOffset(0, this->entry_size, entry_index + 1);
-                    std::memcpy(std::addressof(next_entry), buffer + ofs, this->entry_size);
+                    const auto ofs = impl::GetBucketTreeEntryOffset(0, m_entry_size, entry_index + 1);
+                    std::memcpy(std::addressof(next_entry), buffer + ofs, m_entry_size);
                 } else {
-                    const auto ofs = impl::GetBucketTreeEntryOffset(param.entry_set.index, this->node_size, this->entry_size, entry_index + 1);
-                    R_TRY(this->entry_storage.Read(ofs, std::addressof(next_entry), this->entry_size));
+                    const auto ofs = impl::GetBucketTreeEntryOffset(param.entry_set.index, m_node_size, m_entry_size, entry_index + 1);
+                    R_TRY(m_entry_storage.Read(ofs, std::addressof(next_entry), m_entry_size));
                 }
 
                 next_entry_offset = next_entry.GetVirtualOffset();
-                R_UNLESS(this->Includes(next_entry_offset), fs::ResultInvalidIndirectEntryOffset());
+                R_UNLESS(param.offsets.IsInclude(next_entry_offset), fs::ResultInvalidIndirectEntryOffset());
             } else {
                 next_entry_offset = param.entry_set.offset;
             }
@@ -103,7 +109,7 @@ namespace ams::fssystem {
 
             /* Determine how much data we should read. */
             const auto remaining_size = end_offset - cur_offset;
-            const size_t read_size = static_cast<size_t>(std::min(data_size, remaining_size));
+            const size_t read_size    = static_cast<size_t>(std::min(data_size, remaining_size));
             AMS_ASSERT(read_size <= param.size);
 
             /* Update our merge tracking. */
@@ -144,7 +150,7 @@ namespace ams::fssystem {
         }
         out_info->SetSkipCount(entry_index - param.entry_index);
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     template<typename EntryType>
@@ -154,12 +160,13 @@ namespace ams::fssystem {
 
         /* Create our parameters. */
         ContinuousReadingParam<EntryType> param = {
-            offset, size, this->entry_set.header, this->entry_index
+            offset, size, m_entry_set.header, m_entry_index
         };
-        std::memcpy(std::addressof(param.entry), this->entry, sizeof(EntryType));
+        std::memcpy(std::addressof(param.offsets), std::addressof(m_offsets), sizeof(BucketTree::Offsets));
+        std::memcpy(std::addressof(param.entry), m_entry, sizeof(EntryType));
 
         /* Scan. */
-        return this->tree->ScanContinuousReading<EntryType>(out_info, param);
+        R_RETURN(m_tree->ScanContinuousReading<EntryType>(out_info, param));
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,6 +17,7 @@
 #include <stratosphere/ncm/ncm_content_meta_database.hpp>
 #include <stratosphere/ncm/ncm_content_storage.hpp>
 #include <stratosphere/ncm/ncm_i_content_manager.hpp>
+#include <stratosphere/fs/fs_content_storage_id.hpp>
 
 namespace ams::ncm {
 
@@ -24,7 +25,7 @@ namespace ams::ncm {
     void Initialize();
     void Finalize();
 
-    void InitializeWithObject(std::shared_ptr<IContentManager> manager_object);
+    void InitializeWithObject(sf::SharedPointer<IContentManager> manager_object);
 
     /* Service API. */
     Result CreateContentStorage(StorageId storage_id);
@@ -45,6 +46,8 @@ namespace ams::ncm {
     Result InactivateContentMetaDatabase(StorageId storage_id);
 
     Result InvalidateRightsIdCache();
+
+    Result ActivateFsContentStorage(fs::ContentStorageId fs_content_storage_id);
 
     /* Deprecated API. */
     Result CloseContentStorageForcibly(StorageId storage_id);

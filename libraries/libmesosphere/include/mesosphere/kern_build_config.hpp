@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#if 1 || defined(AMS_BUILD_FOR_AUDITING)
+#if defined(AMS_BUILD_FOR_AUDITING)
 #define MESOSPHERE_BUILD_FOR_AUDITING
 #endif
 
@@ -26,6 +26,38 @@
 #ifdef  MESOSPHERE_BUILD_FOR_DEBUGGING
 #define MESOSPHERE_ENABLE_ASSERTIONS
 #define MESOSPHERE_ENABLE_DEBUG_PRINT
+#define MESOSPHERE_ENABLE_KERNEL_STACK_USAGE
 #endif
 
-#define MESOSPHERE_BUILD_FOR_TRACING
+#if defined(MESOSPHERE_BUILD_FOR_DEBUGGING)
+#define MESOSPHERE_NOINLINE_IF_DEBUG NOINLINE
+#define MESOSPHERE_ALWAYS_INLINE_IF_RELEASE NOINLINE
+#else
+#define MESOSPHERE_NOINLINE_IF_DEBUG
+#define MESOSPHERE_ALWAYS_INLINE_IF_RELEASE ALWAYS_INLINE
+#endif
+
+//#define MESOSPHERE_BUILD_FOR_TRACING
+//#define MESOSPHERE_ENABLE_PERFORMANCE_COUNTER
+#define MESOSPHERE_ENABLE_PANIC_REGISTER_DUMP
+#define MESOSPHERE_ENABLE_HARDWARE_SINGLE_STEP
+
+/* NOTE: In 16.0.0, Nintendo deleted the creation time field for KProcess, */
+/* but this may be useful for some debugging applications, and so can be. */
+/* re-enabled by toggling this define. */
+//#define MESOSPHERE_ENABLE_PROCESS_CREATION_TIME
+
+/* NOTE: This enables usage of KDebug handles as parameter for svc::GetInfo */
+/* calls which require a process parameter. This enables a debugger to obtain */
+/* address space/layout information, for example. However, it changes abi, and so */
+/* this define allows toggling the extension. */
+#define MESOSPHERE_ENABLE_GET_INFO_OF_DEBUG_PROCESS
+
+/* NOTE: This uses currently-reserved bits inside the MapRange capability */
+/* in order to support large physical addresses (40-bit instead of 36). */
+/* This is toggleable in order to disable it if N ever uses those bits. */
+#if defined(ATMOSPHERE_BOARD_NINTENDO_NX)
+//#define MESOSPHERE_ENABLE_LARGE_PHYSICAL_ADDRESS_CAPABILITIES
+#else
+#define MESOSPHERE_ENABLE_LARGE_PHYSICAL_ADDRESS_CAPABILITIES
+#endif

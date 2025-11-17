@@ -12,7 +12,8 @@ No more than 0x400 opcodes can be enabled at anytime.
 =====
 
 ![License](https://img.shields.io/badge/License-GPLv2-blue.svg)
-[![Chat on Discord](https://camo.githubusercontent.com/b4175720ede4f2621aa066ffbabb70ae30044679/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f636861742d446973636f72642d627269676874677265656e2e737667)](https://discordapp.com/invite/ZdqEhed)
+[![Chat on Discord](https://img.shields.io/badge/Discord-5865f2?logo=discord&logoColor=white)](https://discordapp.com/invite/ZdqEhed)
+![Made with Notepad++](img/np++.png?raw=true)
 
 Atmosphère is a work-in-progress customized firmware for the Nintendo Switch.
 
@@ -22,7 +23,6 @@ Components
 Atmosphère consists of multiple components, each of which replaces/modifies a different component of the system:
 
 * Fusée: First-stage Loader, responsible for loading and validating stage 2 (custom TrustZone) plus package2 (Kernel/FIRM sysmodules), and patching them as needed. This replaces all functionality normally in Package1loader/NX Bootloader.
-    * Sept: Payload used to enable support for runtime key derivation on 7.0.0.
 * Exosphère: Customized TrustZone, to run a customized Secure Monitor
 * Thermosphère: EL2 EmuNAND support, i.e. backing up and using virtualized/redirected NAND images
 * Stratosphère: Custom Sysmodule(s), both Rosalina style to extend the kernel/provide new features, and of the loader reimplementation style to hook important system actions
@@ -36,7 +36,6 @@ This software is licensed under the terms of the GPLv2, with exemptions for spec
 You can find a copy of the license in the [LICENSE file](LICENSE).
 
 Exemptions:
-* The [yuzu Nintendo Switch emulator](https://github.com/yuzu-emu/yuzu) and the [Ryujinx Team and Contributors](https://github.com/orgs/Ryujinx) are exempt from GPLv2 licensing. They are permitted, each at their individual discretion, to instead license any source code authored for the Atmosphère project as either GPLv2 or later or the [MIT license](https://github.com/Atmosphere-NX/Atmosphere/blob/master/docs/licensing_exemptions/MIT_LICENSE). In doing so, they may alter, supplement, or entirely remove the copyright notice for each file they choose to relicense. Neither the Atmosphère project nor its individual contributors shall assert their moral rights against any of the aforementioned projects.
 * [Nintendo](https://github.com/Nintendo) is exempt from GPLv2 licensing and may (at its option) instead license any source code authored for the Atmosphère project under the Zero-Clause BSD license.
 
 Credits
@@ -47,7 +46,7 @@ In no particular order, we credit the following for their invaluable contributio
 
 * __switchbrew__ for the [libnx](https://github.com/switchbrew/libnx) project and the extensive [documentation, research and tool development](http://switchbrew.org) pertaining to the Nintendo Switch.
 * __devkitPro__ for the [devkitA64](https://devkitpro.org/) toolchain and libnx support.
-* __ReSwitched Team__ for additional [documentation, research and tool development](https://reswitched.team/) pertaining to the Nintendo Switch.
+* __ReSwitched Team__ for additional [documentation, research and tool development](https://reswitched.github.io/) pertaining to the Nintendo Switch.
 * __ChaN__ for the [FatFs](http://elm-chan.org/fsw/ff/00index_e.html) module.
 * __Marcus Geelnard__ for the [bcl-1.2.0](https://sourceforge.net/projects/bcl/files/bcl/bcl-1.2.0) library.
 * __naehrwert__ and __st4rk__ for the original [hekate](https://github.com/nwert/hekate) project and its hwinit code base.

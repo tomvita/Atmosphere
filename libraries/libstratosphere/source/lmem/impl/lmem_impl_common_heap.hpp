@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2019 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -26,34 +26,34 @@ namespace ams::lmem::impl {
         NON_COPYABLE(ScopedHeapLock);
         NON_MOVEABLE(ScopedHeapLock);
         private:
-            HeapHandle handle;
+            HeapHandle m_handle;
         public:
-            explicit ScopedHeapLock(HeapHandle h) : handle(h) {
-                if (this->handle->option & CreateOption_ThreadSafe) {
-                    os::LockMutex(std::addressof(this->handle->mutex));
+            explicit ScopedHeapLock(HeapHandle h) : m_handle(h) {
+                if (m_handle->option & CreateOption_ThreadSafe) {
+                    os::LockSdkMutex(std::addressof(m_handle->mutex));
                 }
             }
 
             ~ScopedHeapLock() {
-                if (this->handle->option & CreateOption_ThreadSafe) {
-                    os::UnlockMutex(std::addressof(this->handle->mutex));
+                if (m_handle->option & CreateOption_ThreadSafe) {
+                    os::UnlockSdkMutex(std::addressof(m_handle->mutex));
                 }
             }
     };
 
-    constexpr inline MemoryRange MakeMemoryRange(void *address, size_t size) {
+    ALWAYS_INLINE MemoryRange MakeMemoryRange(void *address, size_t size) {
         return MemoryRange{ .address = reinterpret_cast<uintptr_t>(address), .size = size };
     }
 
-    constexpr inline void *GetHeapStartAddress(HeapHandle handle) {
+    ALWAYS_INLINE void *GetHeapStartAddress(HeapHandle handle) {
         return handle->heap_start;
     }
 
-    constexpr inline size_t GetPointerDifference(const void *start, const void *end) {
+    ALWAYS_INLINE size_t GetPointerDifference(const void *start, const void *end) {
         return reinterpret_cast<uintptr_t>(end) - reinterpret_cast<uintptr_t>(start);
     }
 
-    constexpr inline size_t GetPointerDifference(uintptr_t start, uintptr_t end) {
+    constexpr ALWAYS_INLINE size_t GetPointerDifference(uintptr_t start, uintptr_t end) {
         return end - start;
     }
 
@@ -68,8 +68,8 @@ namespace ams::lmem::impl {
 
     inline void FillMemory(void *dst, u32 fill_value, size_t size) {
         /* All heap blocks must be at least 32-bit aligned. */
-        /* AMS_ASSERT(util::IsAligned(dst, 4)); */
-        /* AMS_ASSERT(util::IsAligned(size, 4)); */
+        AMS_ASSERT(util::IsAligned(reinterpret_cast<uintptr_t>(dst), alignof(u32)));
+        AMS_ASSERT(util::IsAligned(size, sizeof(u32)));
         for (size_t i = 0; i < size / sizeof(fill_value); i++) {
             reinterpret_cast<u32 *>(dst)[i] = fill_value;
         }

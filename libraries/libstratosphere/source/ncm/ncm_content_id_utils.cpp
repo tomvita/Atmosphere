@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -21,7 +21,7 @@ namespace ams::ncm {
 
         void GetStringFromBytes(char *dst, const void *src, size_t count) {
             for (size_t i = 0; i < count; i++) {
-                std::snprintf(dst + 2 * i, 3, "%02x", static_cast<const u8 *>(src)[i]);
+                util::SNPrintf(dst + 2 * i, 3, "%02x", static_cast<const u8 *>(src)[i]);
             }
         }
 
@@ -34,7 +34,7 @@ namespace ams::ncm {
             /* Convert each character pair to a byte until we reach the end. */
             for (size_t i = 0; i < src_size; i += 2) {
                 char tmp[3];
-                strlcpy(tmp, src + i, sizeof(tmp));
+                util::Strlcpy(tmp, src + i, sizeof(tmp));
 
                 char *err = nullptr;
                 reinterpret_cast<u8 *>(dst)[i / 2] = static_cast<u8>(std::strtoul(tmp, std::addressof(err), 16));
@@ -68,23 +68,23 @@ namespace ams::ncm {
         AMS_ABORT_UNLESS(dst_size > TicketFileStringLength);
         ContentIdString str;
         GetStringFromRightsId(str.data, sizeof(str), id);
-        std::snprintf(dst, dst_size, "%s.tik", str.data);
+        util::SNPrintf(dst, dst_size, "%s.tik", str.data);
     }
 
     void GetCertificateFileStringFromRightsId(char *dst, size_t dst_size, fs::RightsId id) {
         AMS_ABORT_UNLESS(dst_size > CertFileStringLength);
         ContentIdString str;
         GetStringFromRightsId(str.data, sizeof(str), id);
-        std::snprintf(dst, dst_size, "%s.cert", str.data);
+        util::SNPrintf(dst, dst_size, "%s.cert", str.data);
     }
 
-    std::optional<ContentId> GetContentIdFromString(const char *str, size_t len) {
+    util::optional<ContentId> GetContentIdFromString(const char *str, size_t len) {
         if (len < ContentIdStringLength) {
-            return std::nullopt;
+            return util::nullopt;
         }
 
         ContentId content_id;
-        return GetBytesFromString(std::addressof(content_id), sizeof(content_id), str, ContentIdStringLength) ? std::optional<ContentId>(content_id) : std::nullopt;
+        return GetBytesFromString(std::addressof(content_id), sizeof(content_id), str, ContentIdStringLength) ? util::optional<ContentId>(content_id) : util::nullopt;
     }
 
 }

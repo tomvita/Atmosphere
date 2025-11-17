@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,9 +17,9 @@
 #pragma once
 #include <vapours/results/results_common.hpp>
 
-namespace ams::pm {
+R_DEFINE_NAMESPACE_RESULT_MODULE(ams::pm, 15);
 
-    R_DEFINE_NAMESPACE_RESULT_MODULE(15);
+namespace ams::pm {
 
     R_DEFINE_ERROR_RESULT(ProcessNotFound,    1);
     R_DEFINE_ERROR_RESULT(AlreadyStarted,     2);
@@ -27,5 +27,6 @@ namespace ams::pm {
     R_DEFINE_ERROR_RESULT(DebugHookInUse,     4);
     R_DEFINE_ERROR_RESULT(ApplicationRunning, 5);
     R_DEFINE_ERROR_RESULT(InvalidSize,        6);
+    R_DEFINE_ERROR_RESULT(Unknown7,           7);
 
 }

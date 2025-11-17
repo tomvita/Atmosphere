@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,12 +17,21 @@
 
 namespace ams::fs::impl {
 
+    /* ACCURATE_TO_VERSION: Unknown */
+
     /* Delimiting of mount names. */
     constexpr inline const char ReservedMountNamePrefixCharacter                = '@';
-    constexpr inline const char * const MountNameDelimiter                      = ":/";
+
+    #define AMS_FS_IMPL_MOUNT_NAME_DELIMITER     ":/"
+    #define AMS_FS_IMPL_MOUNT_NAME_DELIMITER_LEN 2
+    constexpr inline const char * const MountNameDelimiter = AMS_FS_IMPL_MOUNT_NAME_DELIMITER;
 
     /* Filesystem names. */
-    constexpr inline const char * const HostRootFileSystemMountName             = "@Host";
+    #define AMS_FS_IMPL_HOST_ROOT_FILE_SYSTEM_MOUNT_NAME     "@Host"
+    #define AMS_FS_IMPL_HOST_ROOT_FILE_SYSTEM_MOUNT_NAME_LEN 5
+
+    constexpr inline const char * const HostRootFileSystemMountName = AMS_FS_IMPL_HOST_ROOT_FILE_SYSTEM_MOUNT_NAME;
+
     constexpr inline const char * const SdCardFileSystemMountName               = "@Sdcard";
     constexpr inline const char * const GameCardFileSystemMountName             = "@Gc";
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -20,14 +20,14 @@ namespace ams::fssrv::fscreator {
     Result PartitionFileSystemCreator::Create(std::shared_ptr<fs::fsa::IFileSystem> *out, std::shared_ptr<fs::IStorage> storage) {
         /* Allocate a filesystem. */
         std::shared_ptr fs = fssystem::AllocateShared<fssystem::PartitionFileSystem>();
-        R_UNLESS(fs != nullptr, fs::ResultAllocationFailureInPartitionFileSystemCreatorA());
+        R_UNLESS(fs != nullptr, fs::ResultAllocationMemoryFailedInPartitionFileSystemCreatorA());
 
         /* Initialize the filesystem. */
         R_TRY(fs->Initialize(std::move(storage)));
 
         /* Set the output. */
         *out = std::move(fs);
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
 }

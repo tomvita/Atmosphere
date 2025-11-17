@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,13 +19,19 @@
 
 #include <vapours/crypto/crypto_memory_compare.hpp>
 #include <vapours/crypto/crypto_memory_clear.hpp>
+#include <vapours/crypto/crypto_md5_generator.hpp>
 #include <vapours/crypto/crypto_sha1_generator.hpp>
 #include <vapours/crypto/crypto_sha256_generator.hpp>
+#include <vapours/crypto/crypto_sha3_generator.hpp>
 #include <vapours/crypto/crypto_aes_encryptor.hpp>
 #include <vapours/crypto/crypto_aes_decryptor.hpp>
+#include <vapours/crypto/crypto_aes_cbc_encryptor_decryptor.hpp>
+#include <vapours/crypto/crypto_aes_ccm_encryptor_decryptor.hpp>
 #include <vapours/crypto/crypto_aes_ctr_encryptor_decryptor.hpp>
 #include <vapours/crypto/crypto_aes_xts_encryptor_decryptor.hpp>
 #include <vapours/crypto/crypto_aes_gcm_encryptor.hpp>
+#include <vapours/crypto/crypto_aes_128_cmac_generator.hpp>
+#include <vapours/crypto/crypto_rsa_pkcs1_sha256_verifier.hpp>
 #include <vapours/crypto/crypto_rsa_pss_sha256_verifier.hpp>
 #include <vapours/crypto/crypto_rsa_oaep_sha256_decoder.hpp>
 #include <vapours/crypto/crypto_rsa_oaep_sha256_decryptor.hpp>

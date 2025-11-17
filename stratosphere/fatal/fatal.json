@@ -10,7 +10,8 @@
 	"is_retail":	true,
 	"pool_partition":	2,
 	"is_64_bit":	true,
-	"address_space_type":	1,
+	"address_space_type":	3,
+    "disable_device_address_space_merge":    true,
 	"filesystem_access":	{
 		"permissions":	"0xFFFFFFFFFFFFFFFF"
 	},
@@ -70,12 +71,16 @@
 				"svcGetInfo":	"0x29",
 				"svcWaitForAddress":	"0x34",
 				"svcSignalToAddress":	"0x35",
+                "svcSynchronizePreemptionState": "0x36",
 				"svcCreateSession":	"0x40",
 				"svcAcceptSession":	"0x41",
 				"svcReplyAndReceiveLight":	"0x42",
 				"svcReplyAndReceive":	"0x43",
 				"svcReplyAndReceiveWithUserBuffer":	"0x44",
 				"svcCreateEvent":	"0x45",
+				"svcMapPhysicalMemoryUnsafe":	"0x48",
+				"svcUnmapPhysicalMemoryUnsafe":	"0x49",
+				"svcSetUnsafeLimit":	"0x4A",
 				"svcReadWriteRegister":	"0x4E",
                 "svcDebugActiveProcess": "0x60",
                 "svcGetDebugEvent": "0x63",
@@ -84,7 +89,9 @@
                 "svcQueryDebugProcessMemory": "0x69",
                 "svcReadDebugProcessMemory": "0x6a",
                 "svcGetDebugThreadParam": "0x6d",
-                "svcCallSecureMonitor": "0x7f"
+                "svcCallSecureMonitor": "0x7f",
+                "svcMapInsecureMemory": "0x90",
+                "svcUnmapInsecureMemory": "0x91"
 			}
 		}, {
 			"type":	"min_kernel_version",
@@ -97,6 +104,7 @@
             "type": "debug_flags",
             "value": {
                 "allow_debug": false,
+                "force_debug_prod": false,
                 "force_debug": true
             }
         }]

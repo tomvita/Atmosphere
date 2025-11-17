@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -25,11 +25,21 @@ namespace ams::ncm {
             ContentMetaDatabaseImpl(ContentMetaKeyValueStore *kvs) : ContentMetaDatabaseImplBase(kvs) { /* ... */ }
         private:
             /* Helpers. */
-            Result GetContentIdImpl(ContentId *out, const ContentMetaKey &key, ContentType type, std::optional<u8> id_offset) const;
+            Result GetContentInfoImpl(ContentInfo *out, const ContentMetaKey &key, ContentType type, util::optional<u8> id_offset) const;
+
+            Result GetContentIdImpl(ContentId *out, const ContentMetaKey &key, ContentType type, util::optional<u8> id_offset) const {
+                /* Get the content info. */
+                ContentInfo content_info;
+                R_TRY(this->GetContentInfoImpl(std::addressof(content_info), key, type, id_offset));
+
+                /* Set the output id. */
+                *out = content_info.GetId();
+                R_SUCCEED();
+            }
         public:
             /* Actual commands. */
-            virtual Result Set(const ContentMetaKey &key, sf::InBuffer value) override;
-            virtual Result Get(sf::Out<u64> out_size, const ContentMetaKey &key, sf::OutBuffer out_value) override;
+            virtual Result Set(const ContentMetaKey &key, const sf::InBuffer &value) override;
+            virtual Result Get(sf::Out<u64> out_size, const ContentMetaKey &key, const sf::OutBuffer &out_value) override;
             virtual Result Remove(const ContentMetaKey &key) override;
             virtual Result GetContentIdByType(sf::Out<ContentId> out_content_id, const ContentMetaKey &key, ContentType type) override;
             virtual Result ListContentInfo(sf::Out<s32> out_entries_written, const sf::OutArray<ContentInfo> &out_info, const ContentMetaKey &key, s32 offset) override;
@@ -40,7 +50,7 @@ namespace ams::ncm {
             virtual Result HasAll(sf::Out<bool> out, const sf::InArray<ContentMetaKey> &keys) override;
             virtual Result GetSize(sf::Out<u64> out_size, const ContentMetaKey &key) override;
             virtual Result GetRequiredSystemVersion(sf::Out<u32> out_version, const ContentMetaKey &key) override;
-            virtual Result GetPatchId(sf::Out<PatchId> out_patch_id, const ContentMetaKey &key) override;
+            virtual Result GetPatchContentMetaId(sf::Out<u64> out_patch_id, const ContentMetaKey &key) override;
             virtual Result DisableForcibly() override;
             virtual Result LookupOrphanContent(const sf::OutArray<bool> &out_orphaned, const sf::InArray<ContentId> &content_ids) override;
             virtual Result Commit() override;
@@ -51,6 +61,11 @@ namespace ams::ncm {
             virtual Result GetContentIdByTypeAndIdOffset(sf::Out<ContentId> out_content_id, const ContentMetaKey &key, ContentType type, u8 id_offset) override;
             virtual Result GetCount(sf::Out<u32> out_count) override;
             virtual Result GetOwnerApplicationId(sf::Out<ApplicationId> out_id, const ContentMetaKey &key) override;
+            virtual Result GetContentAccessibilities(sf::Out<u8> out_accessibilities, const ContentMetaKey &key) override;
+            virtual Result GetContentInfoByType(sf::Out<ContentInfo> out_content_info, const ContentMetaKey &key, ContentType type) override;
+            virtual Result GetContentInfoByTypeAndIdOffset(sf::Out<ContentInfo> out_content_info, const ContentMetaKey &key, ContentType type, u8 id_offset) override;
+            virtual Result GetPlatform(sf::Out<ncm::ContentMetaPlatform> out, const ContentMetaKey &key) override;
+            virtual Result HasAttributes(sf::Out<u8> out, u8 attr_mask) override;
     };
 
 }

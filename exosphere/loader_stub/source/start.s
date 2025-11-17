@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -97,9 +97,6 @@ _start:
     /* Set the stack pointer to a temporary location. */
     ldr x20, =0x7C020000
     mov sp, x20
-
-    /* Call our init array functions. */
-    bl __libc_init_array
 
     /* Uncompress the program and iram boot code images. */
     b _ZN3ams6secmon6loader20UncompressAndExecuteEv

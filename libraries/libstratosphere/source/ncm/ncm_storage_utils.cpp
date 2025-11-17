@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -45,10 +45,10 @@ namespace ams::ncm {
 
             /* Output the storage id. */
             *out_storage_id = storage_id;
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
-        return ncm::ResultNotEnoughInstallSpace();
+        R_THROW(ncm::ResultNotEnoughInstallSpace());
     }
 
     Result SelectPatchStorage(StorageId *out_storage_id, StorageId storage_id, PatchId patch_id) {
@@ -77,29 +77,7 @@ namespace ams::ncm {
             }
         }
 
-        return ResultSuccess();
-    }
-
-    namespace {
-
-        constexpr const char * const StorageIdStrings[] = {
-            "None",
-            "Host",
-            "GameCard",
-            "BuiltInSystem",
-            "BuiltInUser",
-            "SdCard"
-        };
-
-        constexpr const char * const StorageIdStringsForPlayReport[] = {
-            "None",
-            "Host",
-            "Card",
-            "BuildInSystem",
-            "BuildInUser",
-            "SdCard"
-        };
-
+        R_SUCCEED();
     }
 
     const char *GetStorageIdString(StorageId storage_id) {

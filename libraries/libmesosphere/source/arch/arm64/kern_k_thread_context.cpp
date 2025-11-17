@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -21,12 +21,23 @@ namespace ams::kern::arch::arm64 {
     void UserModeThreadStarter();
     void SupervisorModeThreadStarter();
 
+    void InvokeSupervisorModeThread(uintptr_t argument, uintptr_t entrypoint) {
+        /* Invoke the function. */
+        using SupervisorModeFunctionType = void (*)(uintptr_t);
+        reinterpret_cast<SupervisorModeFunctionType>(entrypoint)(argument);
+
+        /* Wait forever. */
+        AMS_INFINITE_LOOP();
+    }
+
     void OnThreadStart() {
         MESOSPHERE_ASSERT(!KInterruptManager::AreInterruptsEnabled());
         /* Send KDebug event for this thread's creation. */
         {
             KScopedInterruptEnable ei;
-            KDebug::OnDebugEvent(ams::svc::DebugEvent_CreateThread, GetCurrentThread().GetId(), GetInteger(GetCurrentThread().GetThreadLocalRegionAddress()), GetCurrentThread().GetEntrypoint());
+
+            const uintptr_t params[2] = { GetCurrentThread().GetId(), GetInteger(GetCurrentThread().GetThreadLocalRegionAddress()) };
+            static_cast<void>(KDebug::OnDebugEvent(ams::svc::DebugEvent_CreateThread, params, util::size(params)));
         }
 
         /* Handle any pending dpc. */
@@ -40,8 +51,6 @@ namespace ams::kern::arch::arm64 {
 
     namespace {
 
-        constexpr inline u32 El0PsrMask = 0xFF0FFE20;
-
         ALWAYS_INLINE bool IsFpuEnabled() {
             return cpu::ArchitecturalFeatureAccessControlRegisterAccessor().IsFpEnabled();
         }
@@ -51,12 +60,12 @@ namespace ams::kern::arch::arm64 {
             cpu::InstructionMemoryBarrier();
         }
 
-        uintptr_t SetupStackForUserModeThreadStarter(KVirtualAddress pc, KVirtualAddress k_sp, KVirtualAddress u_sp, uintptr_t arg, bool is_64_bit) {
-            /* NOTE: Stack layout on entry looks like following:                         */
-            /* SP                                                                        */
-            /* |                                                                         */
-            /* v                                                                         */
-            /* | KExceptionContext (size 0x120) | KThread::StackParameters (size 0x30) | */
+        uintptr_t SetupStackForUserModeThreadStarter(KVirtualAddress pc, KVirtualAddress k_sp, KVirtualAddress u_sp, uintptr_t arg, const bool is_64_bit) {
+            /* NOTE: Stack layout on entry looks like following:                          */
+            /* SP                                                                         */
+            /* |                                                                          */
+            /* v                                                                          */
+            /* | KExceptionContext (size 0x120) | KThread::StackParameters (size 0x130) | */
             KExceptionContext *ctx = GetPointer<KExceptionContext>(k_sp) - 1;
 
             /* Clear context. */
@@ -76,6 +85,11 @@ namespace ams::kern::arch::arm64 {
                 MESOSPHERE_LOG("Creating User 32-Thread, %016lx\n", GetInteger(pc));
             }
 
+            /* Set CFI-value. */
+            if (is_64_bit) {
+                ctx->x[18] = KSystemControl::GenerateRandomU64() | 1;
+            }
+
             /* Set stack pointer. */
             if (is_64_bit) {
                 ctx->sp    = GetInteger(u_sp);
@@ -87,12 +101,12 @@ namespace ams::kern::arch::arm64 {
         }
 
         uintptr_t SetupStackForSupervisorModeThreadStarter(KVirtualAddress pc, KVirtualAddress sp, uintptr_t arg) {
-            /* NOTE: Stack layout on entry looks like following:                        */
-            /* SP                                                                       */
-            /* |                                                                        */
-            /* v                                                                        */
-            /* | u64 argument | u64 entrypoint | KThread::StackParameters (size 0x30) | */
-            static_assert(sizeof(KThread::StackParameters) == 0x30);
+            /* NOTE: Stack layout on entry looks like following:                         */
+            /* SP                                                                        */
+            /* |                                                                         */
+            /* v                                                                         */
+            /* | u64 argument | u64 entrypoint | KThread::StackParameters (size 0x140) | */
+            static_assert(sizeof(KThread::StackParameters) == 0x140);
 
             u64 *stack = GetPointer<u64>(sp);
             *(--stack) = GetInteger(pc);
@@ -102,7 +116,7 @@ namespace ams::kern::arch::arm64 {
 
     }
 
-    Result KThreadContext::Initialize(KVirtualAddress u_pc, KVirtualAddress k_sp, KVirtualAddress u_sp, uintptr_t arg, bool is_user, bool is_64_bit, bool is_main) {
+    void KThreadContext::Initialize(KVirtualAddress u_pc, KVirtualAddress k_sp, KVirtualAddress u_sp, uintptr_t arg, bool is_user, bool is_64_bit, bool is_main) {
         MESOSPHERE_ASSERT(k_sp != Null<KVirtualAddress>);
 
         /* Ensure that the stack pointers are aligned. */
@@ -112,73 +126,51 @@ namespace ams::kern::arch::arm64 {
         /* Determine LR and SP. */
         if (is_user) {
             /* Usermode thread. */
-            this->lr = reinterpret_cast<uintptr_t>(::ams::kern::arch::arm64::UserModeThreadStarter);
-            this->sp = SetupStackForUserModeThreadStarter(u_pc, k_sp, u_sp, arg, is_64_bit);
+            m_lr = reinterpret_cast<uintptr_t>(::ams::kern::arch::arm64::UserModeThreadStarter);
+            m_sp = SetupStackForUserModeThreadStarter(u_pc, k_sp, u_sp, arg, is_64_bit);
         } else {
             /* Kernel thread. */
             MESOSPHERE_ASSERT(is_64_bit);
 
             if (is_main) {
                 /* Main thread. */
-                this->lr = GetInteger(u_pc);
-                this->sp = GetInteger(k_sp);
+                m_lr = GetInteger(u_pc);
+                m_sp = GetInteger(k_sp);
             } else {
                 /* Generic Kernel thread. */
-                this->lr = reinterpret_cast<uintptr_t>(::ams::kern::arch::arm64::SupervisorModeThreadStarter);
-                this->sp = SetupStackForSupervisorModeThreadStarter(u_pc, k_sp, arg);
+                m_lr = reinterpret_cast<uintptr_t>(::ams::kern::arch::arm64::SupervisorModeThreadStarter);
+                m_sp = SetupStackForSupervisorModeThreadStarter(u_pc, k_sp, arg);
             }
         }
 
         /* Clear callee-saved registers. */
-        for (size_t i = 0; i < util::size(this->callee_saved.registers); i++) {
-            this->callee_saved.registers[i] = 0;
+        for (size_t i = 0; i < util::size(m_callee_saved.registers); i++) {
+            m_callee_saved.registers[i] = 0;
         }
 
         /* Clear FPU state. */
-        this->fpcr = 0;
-        this->fpsr = 0;
-        this->cpacr = 0;
-        for (size_t i = 0; i < util::size(this->fpu_registers); i++) {
-            this->fpu_registers[i] = 0;
+        m_fpcr = 0;
+        m_fpsr = 0;
+        for (size_t i = 0; i < util::size(m_callee_saved_fpu.fpu64.v); ++i) {
+            m_callee_saved_fpu.fpu64.v[i] = 0;
         }
 
         /* Lock the context, if we're a main thread. */
-        this->locked = is_main;
-
-        return ResultSuccess();
-    }
-
-    Result KThreadContext::Finalize() {
-        /* This doesn't actually do anything. */
-        return ResultSuccess();
+        m_locked = is_main;
     }
 
     void KThreadContext::SetArguments(uintptr_t arg0, uintptr_t arg1) {
-        u64 *stack = reinterpret_cast<u64 *>(this->sp);
+        u64 *stack = reinterpret_cast<u64 *>(m_sp);
         stack[0] = arg0;
         stack[1] = arg1;
-    }
-
-    void KThreadContext::FpuContextSwitchHandler(KThread *thread) {
-        MESOSPHERE_ASSERT(!KInterruptManager::AreInterruptsEnabled());
-        MESOSPHERE_ASSERT(!IsFpuEnabled());
-
-        /* Enable the FPU. */
-        EnableFpu();
-
-        /* Restore the FPU registers. */
-        KProcess *process = thread->GetOwnerProcess();
-        MESOSPHERE_ASSERT(process != nullptr);
-        if (process->Is64Bit()) {
-            RestoreFpuRegisters64(thread->GetContext());
-        } else {
-            RestoreFpuRegisters32(thread->GetContext());
-        }
     }
 
     void KThreadContext::CloneFpuStatus() {
         u64 pcr, psr;
         cpu::InstructionMemoryBarrier();
+
+        KScopedInterruptDisable di;
+
         if (IsFpuEnabled()) {
             __asm__ __volatile__("mrs %[pcr], fpcr" : [pcr]"=r"(pcr) :: "memory");
             __asm__ __volatile__("mrs %[psr], fpsr" : [psr]"=r"(psr) :: "memory");
@@ -189,18 +181,6 @@ namespace ams::kern::arch::arm64 {
 
         this->SetFpcr(pcr);
         this->SetFpsr(psr);
-    }
-
-    void KThreadContext::SetFpuRegisters(const u128 *v, bool is_64_bit) {
-        if (is_64_bit) {
-            for (size_t i = 0; i < KThreadContext::NumFpuRegisters; ++i) {
-                this->fpu_registers[i] = v[i];
-            }
-        } else {
-            for (size_t i = 0; i < KThreadContext::NumFpuRegisters / 2; ++i) {
-                this->fpu_registers[i] = v[i];
-            }
-        }
     }
 
     void GetUserContext(ams::svc::ThreadContext *out, const KThread *thread) {
@@ -218,7 +198,7 @@ namespace ams::kern::arch::arm64 {
             out->lr     = e_ctx->x[30];
             out->sp     = e_ctx->sp;
             out->pc     = e_ctx->pc;
-            out->pstate = e_ctx->psr & El0PsrMask;
+            out->pstate = e_ctx->psr & cpu::El0Aarch64PsrMask;
 
             /* Get the thread's general purpose registers. */
             if (thread->IsCallingSvc()) {
@@ -239,14 +219,22 @@ namespace ams::kern::arch::arm64 {
 
             /* Copy fpu registers. */
             static_assert(util::size(ams::svc::ThreadContext{}.v) == KThreadContext::NumFpuRegisters);
-            const u128 *f = t_ctx->GetFpuRegisters();
-            for (size_t i = 0; i < KThreadContext::NumFpuRegisters; ++i) {
-                out->v[i] = f[i];
+            static_assert(KThreadContext::NumCallerSavedFpuRegisters == KThreadContext::NumCalleeSavedFpuRegisters * 3);
+            static_assert(KThreadContext::NumFpuRegisters == KThreadContext::NumCallerSavedFpuRegisters + KThreadContext::NumCalleeSavedFpuRegisters);
+            const auto &caller_save_fpu = thread->GetCallerSaveFpuRegisters().fpu64;
+            const auto &callee_save_fpu = t_ctx->GetCalleeSaveFpuRegisters().fpu64;
+
+            if (!thread->IsCallingSvc() || thread->IsInUsermodeExceptionHandler()) {
+                KThreadContext::GetFpuRegisters(out->v, caller_save_fpu, callee_save_fpu);
+            } else {
+                for (size_t i = 0; i < KThreadContext::NumCalleeSavedFpuRegisters; ++i) {
+                    out->v[(KThreadContext::NumCallerSavedFpuRegisters / 3) + i] = caller_save_fpu.v[i];
+                }
             }
         } else {
             /* Set special registers. */
             out->pc     = static_cast<u32>(e_ctx->pc);
-            out->pstate = e_ctx->psr & 0xFF0FFE20;
+            out->pstate = e_ctx->psr & cpu::El0Aarch32PsrMask;
 
             /* Get the thread's general purpose registers. */
             for (size_t i = 0; i < 15; ++i) {
@@ -266,12 +254,17 @@ namespace ams::kern::arch::arm64 {
 
             /* Copy fpu registers. */
             static_assert(util::size(ams::svc::ThreadContext{}.v) == KThreadContext::NumFpuRegisters);
-            const u128 *f = t_ctx->GetFpuRegisters();
-            for (size_t i = 0; i < KThreadContext::NumFpuRegisters / 2; ++i) {
-                out->v[i] = f[i];
-            }
-            for (size_t i = KThreadContext::NumFpuRegisters / 2; i < KThreadContext::NumFpuRegisters; ++i) {
-                out->v[i] = 0;
+            static_assert(KThreadContext::NumCallerSavedFpuRegisters == KThreadContext::NumCalleeSavedFpuRegisters * 3);
+            static_assert(KThreadContext::NumFpuRegisters == KThreadContext::NumCallerSavedFpuRegisters + KThreadContext::NumCalleeSavedFpuRegisters);
+            const auto &caller_save_fpu = thread->GetCallerSaveFpuRegisters().fpu32;
+            const auto &callee_save_fpu = t_ctx->GetCalleeSaveFpuRegisters().fpu32;
+
+            if (!thread->IsCallingSvc() || thread->IsInUsermodeExceptionHandler()) {
+                KThreadContext::GetFpuRegisters(out->v, caller_save_fpu, callee_save_fpu);
+            } else {
+                for (size_t i = 0; i < KThreadContext::NumCalleeSavedFpuRegisters / 2; ++i) {
+                    out->v[((KThreadContext::NumCallerSavedFpuRegisters / 3) / 2) + i] = caller_save_fpu.v[i];
+                }
             }
         }
 

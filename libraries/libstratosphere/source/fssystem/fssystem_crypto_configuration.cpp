@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -22,9 +22,11 @@ namespace ams::fssystem {
 
         constexpr inline const size_t KeySize = crypto::AesDecryptor128::KeySize;
 
-        constexpr inline const size_t AcidSignatureKeyGenerationMax = 1;
+        constexpr inline const size_t NxAcidSignatureKeyGenerationMax = 1;
 
-        constexpr inline const u8 AcidSignatureKeyModulusDev[AcidSignatureKeyGenerationMax + 1][AcidSignatureKeyModulusSize] = {
+        constexpr inline const size_t NxAcidSignatureKeyModulusSize = NcaCryptoConfiguration::Rsa2048KeyModulusSize;
+
+        constexpr inline const u8 NxAcidSignatureKeyModulusDev[NxAcidSignatureKeyGenerationMax + 1][NxAcidSignatureKeyModulusSize] = {
             {
                 0xD6, 0x34, 0xA5, 0x78, 0x6C, 0x68, 0xCE, 0x5A, 0xC2, 0x37, 0x17, 0xF3, 0x82, 0x45, 0xC6, 0x89,
                 0xE1, 0x2D, 0x06, 0x67, 0xBF, 0xB4, 0x06, 0x19, 0x55, 0x6B, 0x27, 0x66, 0x0C, 0xA4, 0xB5, 0x87,
@@ -63,7 +65,7 @@ namespace ams::fssystem {
             }
         };
 
-        constexpr inline const u8 AcidSignatureKeyModulusProd[AcidSignatureKeyGenerationMax + 1][AcidSignatureKeyModulusSize] = {
+        constexpr inline const u8 NxAcidSignatureKeyModulusProd[NxAcidSignatureKeyGenerationMax + 1][NxAcidSignatureKeyModulusSize] = {
             {
                 0xDD, 0xC8, 0xDD, 0xF2, 0x4E, 0x6D, 0xF0, 0xCA, 0x9E, 0xC7, 0x5D, 0xC7, 0x7B, 0xAD, 0xFE, 0x7D,
                 0x23, 0x89, 0x69, 0xB6, 0xF2, 0x06, 0xA2, 0x02, 0x88, 0xE1, 0x55, 0x91, 0xAB, 0xCB, 0x4D, 0x50,
@@ -102,7 +104,7 @@ namespace ams::fssystem {
             }
         };
 
-        static_assert(sizeof(AcidSignatureKeyModulusProd) == sizeof(AcidSignatureKeyModulusDev));
+        static_assert(sizeof(NxAcidSignatureKeyModulusProd) == sizeof(NxAcidSignatureKeyModulusDev));
 
         constexpr inline const u8 AcidSignatureKeyPublicExponent[] = {
             0x01, 0x00, 0x01
@@ -112,29 +114,77 @@ namespace ams::fssystem {
         NcaCryptoConfiguration g_nca_crypto_configuration_prod;
 
         constexpr inline s32 KeySlotCacheEntryCount = 3;
-        KeySlotCache g_key_slot_cache;
-        std::optional<KeySlotCacheEntry> g_key_slot_cache_entry[KeySlotCacheEntryCount];
+        constinit KeySlotCache g_key_slot_cache;
+        constinit util::optional<KeySlotCacheEntry> g_key_slot_cache_entry[KeySlotCacheEntryCount];
 
         spl::AccessKey &GetNcaKekAccessKey(s32 key_type) {
-            static spl::AccessKey s_nca_kek_access_key_array[KeyAreaEncryptionKeyCount] = {};
-            static spl::AccessKey s_nca_header_kek_access_key                           = {};
-            static spl::AccessKey s_invalid_nca_kek_access_key                          = {};
+            AMS_FUNCTION_LOCAL_STATIC_CONSTINIT(spl::AccessKey, s_nca_kek_access_key_array[KeyAreaEncryptionKeyCount]);
+            AMS_FUNCTION_LOCAL_STATIC_CONSTINIT(spl::AccessKey, s_nca_header_kek_access_key);
+            AMS_FUNCTION_LOCAL_STATIC_CONSTINIT(spl::AccessKey, s_invalid_nca_kek_access_key);
 
-            if (key_type > static_cast<s32>(KeyType::NcaHeaderKey) || IsInvalidKeyTypeValue(key_type)) {
+            if (key_type > static_cast<s32>(KeyType::NcaHeaderKey2) || IsInvalidKeyTypeValue(key_type)) {
                 return s_invalid_nca_kek_access_key;
-            } else if (key_type == static_cast<s32>(KeyType::NcaHeaderKey)) {
+            } else if (key_type == static_cast<s32>(KeyType::NcaHeaderKey1) || key_type == static_cast<s32>(KeyType::NcaHeaderKey2)) {
                 return s_nca_header_kek_access_key;
             } else {
                 return s_nca_kek_access_key_array[key_type];
             }
         }
 
-        void GenerateNcaKey(void *dst, size_t dst_size, const void *src, size_t src_size, s32 key_type, const NcaCryptoConfiguration &cfg) {
+        void GenerateNcaKey(void *dst, size_t dst_size, const void *src, size_t src_size, s32 key_type) {
             R_ABORT_UNLESS(spl::GenerateAesKey(dst, dst_size, GetNcaKekAccessKey(key_type), src, src_size));
         }
 
-        void DecryptAesCtr(void *dst, size_t dst_size, s32 key_type, const void *enc_key, size_t enc_key_size, const void *iv, size_t iv_size, const void *src, size_t src_size) {
+        void ComputeCtr(void *dst, size_t dst_size, int key_slot_idx, const void *src, size_t src_size, const void *iv, size_t iv_size) {
+            if (dst == src) {
+                /* If the destination and source are the same, we'll use an intermediate buffer. */
+                constexpr size_t MinimumSizeToRequireLocking = 256_KB;
+                constexpr size_t MinimumWorkBufferSize       = 16_KB;
+
+                /* If the request is large enough, acquire a lock to prevent too many large requests in flight simultaneously. */
+                static constinit os::SdkMutex s_large_work_buffer_mutex;
+                util::optional<std::scoped_lock<os::SdkMutex>> lk = util::nullopt;
+                if (dst_size >= MinimumSizeToRequireLocking) {
+                    lk.emplace(s_large_work_buffer_mutex);
+                }
+
+                /* Allocate a pooled buffer. */
+                PooledBuffer pooled_buffer;
+                pooled_buffer.AllocateParticularlyLarge(dst_size, MinimumWorkBufferSize);
+
+                /* Copy the iv locally. */
+                AMS_ASSERT(iv_size == crypto::Aes128CtrEncryptor::IvSize);
+                u8 work_iv[crypto::Aes128CtrEncryptor::IvSize];
+                std::memcpy(work_iv, iv, sizeof(work_iv));
+
+                /* Process all data. */
+                size_t processed = 0;
+                while (processed < dst_size) {
+                    /* Determine the currently processable size. */
+                    const size_t cur_size = std::min<size_t>(dst_size - processed, pooled_buffer.GetSize());
+
+                    /* Process. */
+                    R_ABORT_UNLESS(spl::ComputeCtr(pooled_buffer.GetBuffer(), cur_size, key_slot_idx, static_cast<const u8 *>(src) + processed, cur_size, work_iv, sizeof(work_iv)));
+
+                    /* Copy to dst. */
+                    std::memcpy(static_cast<u8 *>(dst) + processed, pooled_buffer.GetBuffer(), cur_size);
+
+                    /* Advance. */
+                    processed += cur_size;
+
+                    /* Increment the counter. */
+                    fssystem::AddCounter(work_iv, sizeof(work_iv), cur_size / crypto::Aes128CtrEncryptor::BlockSize);
+                }
+            } else {
+                /* If the destination and source are different, we can just call ComputeCtr directly. */
+                R_ABORT_UNLESS(spl::ComputeCtr(dst, dst_size, key_slot_idx, src, src_size, iv, iv_size));
+            }
+        }
+
+        void DecryptAesCtr(void *dst, size_t dst_size, u8 key_index, u8 key_generation, const void *enc_key, size_t enc_key_size, const void *iv, size_t iv_size, const void *src, size_t src_size) {
             std::unique_ptr<KeySlotCacheAccessor> accessor;
+
+            const s32 key_type = GetKeyTypeValue(key_index, key_generation);
 
             R_TRY_CATCH(g_key_slot_cache.Find(std::addressof(accessor), enc_key, enc_key_size, key_type)) {
                 R_CATCH(fs::ResultTargetNotFound) {
@@ -143,13 +193,14 @@ namespace ams::fssystem {
                 }
             } R_END_TRY_CATCH_WITH_ABORT_UNLESS;
 
-            R_ABORT_UNLESS(spl::ComputeCtr(dst, dst_size, accessor->GetKeySlotIndex(), src, src_size, iv, iv_size));
+            ComputeCtr(dst, dst_size, accessor->GetKeySlotIndex(), src, src_size, iv, iv_size);
         }
 
-        void DecryptAesCtrForPreparedKey(void *dst, size_t dst_size, s32 key_type, const void *enc_key, size_t enc_key_size, const void *iv, size_t iv_size, const void *src, size_t src_size) {
+        void DecryptAesCtrForPreparedKey(void *dst, size_t dst_size, u8 key_index, u8 key_generation, const void *enc_key, size_t enc_key_size, const void *iv, size_t iv_size, const void *src, size_t src_size) {
             std::unique_ptr<KeySlotCacheAccessor> accessor;
 
-            key_type = static_cast<s32>(KeyType::NcaExternalKey);
+            AMS_UNUSED(key_index, key_generation);
+            const s32 key_type = static_cast<s32>(KeyType::NcaExternalKey);
 
             R_TRY_CATCH(g_key_slot_cache.Find(std::addressof(accessor), enc_key, enc_key_size, key_type)) {
                 R_CATCH(fs::ResultTargetNotFound) {
@@ -162,21 +213,48 @@ namespace ams::fssystem {
                 }
             } R_END_TRY_CATCH_WITH_ABORT_UNLESS;
 
-            R_ABORT_UNLESS(spl::ComputeCtr(dst, dst_size, accessor->GetKeySlotIndex(), src, src_size, iv, iv_size));
+            ComputeCtr(dst, dst_size, accessor->GetKeySlotIndex(), src, src_size, iv, iv_size);
+        }
+
+        bool VerifySign1Prod(const void *sig, size_t sig_size, const void *data, size_t data_size, u8 generation) {
+            const u8 *mod         = g_nca_crypto_configuration_prod.header_1_sign_key_moduli[generation];
+            const size_t mod_size = NcaCryptoConfiguration::Rsa2048KeyModulusSize;
+            const u8 *exp         = g_nca_crypto_configuration_prod.header_1_sign_key_public_exponent;
+            const size_t exp_size = NcaCryptoConfiguration::Rsa2048KeyPublicExponentSize;
+
+            return crypto::VerifyRsa2048PssSha256(sig, sig_size, mod, mod_size, exp, exp_size, data, data_size);
+        }
+
+        bool VerifySign1Dev(const void *sig, size_t sig_size, const void *data, size_t data_size, u8 generation) {
+            const u8 *mod         = g_nca_crypto_configuration_dev.header_1_sign_key_moduli[generation];
+            const size_t mod_size = NcaCryptoConfiguration::Rsa2048KeyModulusSize;
+            const u8 *exp         = g_nca_crypto_configuration_dev.header_1_sign_key_public_exponent;
+            const size_t exp_size = NcaCryptoConfiguration::Rsa2048KeyPublicExponentSize;
+
+            return crypto::VerifyRsa2048PssSha256(sig, sig_size, mod, mod_size, exp, exp_size, data, data_size);
         }
 
     }
 
     const ::ams::fssystem::NcaCryptoConfiguration *GetNcaCryptoConfiguration(bool prod) {
         /* Decide which configuration to use. */
-        NcaCryptoConfiguration *cfg = prod ? std::addressof(g_nca_crypto_configuration_prod) : std::addressof(g_nca_crypto_configuration_dev);
+        NcaCryptoConfiguration * const cfg = prod ? std::addressof(g_nca_crypto_configuration_prod) : std::addressof(g_nca_crypto_configuration_dev);
         std::memcpy(cfg, fssrv::GetDefaultNcaCryptoConfiguration(prod), sizeof(NcaCryptoConfiguration));
 
         /* Set the key generation functions. */
         cfg->generate_key                  = GenerateNcaKey;
+        cfg->decrypt_aes_xts_external      = nullptr;
+        cfg->encrypt_aes_xts_external      = nullptr;
         cfg->decrypt_aes_ctr               = DecryptAesCtr;
         cfg->decrypt_aes_ctr_external      = DecryptAesCtrForPreparedKey;
+        cfg->verify_sign1                  = prod ? VerifySign1Prod : VerifySign1Dev;
         cfg->is_plaintext_header_available = !prod;
+        cfg->is_available_sw_key           = true;
+
+        /* TODO: Should this default to false for host tools with api to set explicitly? */
+        #if !defined(ATMOSPHERE_BOARD_NINTENDO_NX)
+        cfg->is_unsigned_header_available_for_host_tool = true;
+        #endif
 
         return cfg;
     }
@@ -191,20 +269,21 @@ namespace ams::fssystem {
 
             /* Setup the key area encryption keys. */
             for (u8 i = 0; i < NcaCryptoConfiguration::KeyGenerationMax; ++i) {
-                spl::GenerateAesKek(std::addressof(GetNcaKekAccessKey(GetKeyTypeValue(0, i))), nca_crypto_cfg->key_area_encryption_key_source[0], KeySize, i, Option);
-                spl::GenerateAesKek(std::addressof(GetNcaKekAccessKey(GetKeyTypeValue(1, i))), nca_crypto_cfg->key_area_encryption_key_source[1], KeySize, i, Option);
-                spl::GenerateAesKek(std::addressof(GetNcaKekAccessKey(GetKeyTypeValue(2, i))), nca_crypto_cfg->key_area_encryption_key_source[2], KeySize, i, Option);
+                /* NOTE: Nintendo allows these to fail, since the loop tries key generations past the maximum known. */
+                static_cast<void>(spl::GenerateAesKek(std::addressof(GetNcaKekAccessKey(GetKeyTypeValue(0, i))), nca_crypto_cfg->key_area_encryption_key_source[0], KeySize, i, Option));
+                static_cast<void>(spl::GenerateAesKek(std::addressof(GetNcaKekAccessKey(GetKeyTypeValue(1, i))), nca_crypto_cfg->key_area_encryption_key_source[1], KeySize, i, Option));
+                static_cast<void>(spl::GenerateAesKek(std::addressof(GetNcaKekAccessKey(GetKeyTypeValue(2, i))), nca_crypto_cfg->key_area_encryption_key_source[2], KeySize, i, Option));
             }
 
             /* Setup the header encryption key. */
-            R_ABORT_UNLESS(spl::GenerateAesKek(std::addressof(GetNcaKekAccessKey(static_cast<s32>(KeyType::NcaHeaderKey))), nca_crypto_cfg->header_encryption_key_source, KeySize, 0, Option));
+            R_ABORT_UNLESS(spl::GenerateAesKek(std::addressof(GetNcaKekAccessKey(static_cast<s32>(KeyType::NcaHeaderKey1))), nca_crypto_cfg->header_encryption_key_source, KeySize, 0, Option));
         }
 
         /* TODO FS-REIMPL: Save stuff. */
 
         /* Setup the keyslot cache. */
         for (s32 i = 0; i < KeySlotCacheEntryCount; i++) {
-            s32 slot_index;
+            s32 slot_index = -1;
             R_ABORT_UNLESS(spl::AllocateAesKeySlot(std::addressof(slot_index)));
             g_key_slot_cache_entry[i].emplace(slot_index);
             g_key_slot_cache.AddEntry(std::addressof(g_key_slot_cache_entry[i].value()));
@@ -219,10 +298,36 @@ namespace ams::fssystem {
         }
     }
 
-    const u8 *GetAcidSignatureKeyModulus(bool prod, size_t key_generation) {
-        AMS_ASSERT(key_generation <= AcidSignatureKeyGenerationMax);
-        const size_t used_keygen = (key_generation % (AcidSignatureKeyGenerationMax + 1));
-        return prod ? AcidSignatureKeyModulusProd[used_keygen] : AcidSignatureKeyModulusDev[used_keygen];
+    bool IsValidSignatureKeyGeneration(ncm::ContentMetaPlatform platform, size_t key_generation) {
+        switch (platform) {
+            case ncm::ContentMetaPlatform::Nx:
+                return key_generation <= NxAcidSignatureKeyGenerationMax;
+            AMS_UNREACHABLE_DEFAULT_CASE();
+        }
+    }
+
+    const u8 *GetAcidSignatureKeyModulus(ncm::ContentMetaPlatform platform, bool prod, size_t key_generation, bool unk_unused) {
+        AMS_ASSERT(IsValidSignatureKeyGeneration(platform, key_generation));
+        AMS_UNUSED(unk_unused);
+
+        switch (platform) {
+            case ncm::ContentMetaPlatform::Nx:
+                {
+                    const size_t used_keygen = (key_generation % (NxAcidSignatureKeyGenerationMax + 1));
+                    return prod ? NxAcidSignatureKeyModulusProd[used_keygen] : NxAcidSignatureKeyModulusDev[used_keygen];
+                }
+            AMS_UNREACHABLE_DEFAULT_CASE();
+        }
+    }
+
+    size_t GetAcidSignatureKeyModulusSize(ncm::ContentMetaPlatform platform, bool unk_unused) {
+        AMS_UNUSED(unk_unused);
+
+        switch (platform) {
+            case ncm::ContentMetaPlatform::Nx:
+                return NxAcidSignatureKeyModulusSize;
+            AMS_UNREACHABLE_DEFAULT_CASE();
+        }
     }
 
     const u8 *GetAcidSignatureKeyPublicExponent() {

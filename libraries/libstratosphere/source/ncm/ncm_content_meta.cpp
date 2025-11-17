@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -26,6 +26,7 @@ namespace ams::ncm {
                 .content_count        = src.content_count,
                 .content_meta_count   = src.content_meta_count,
                 .attributes           = src.attributes,
+                .platform             = src.platform,
             };
         }
 
@@ -42,6 +43,7 @@ namespace ams::ncm {
                 .content_count        = src.content_count,
                 .content_meta_count   = src.content_meta_count,
                 .attributes           = src.attributes,
+                .platform             = src.platform,
             };
         }
 
@@ -53,12 +55,12 @@ namespace ams::ncm {
                 auto delta = reader.GetPatchDeltaHeader(i);
                 if ((src_version == 0 || delta->delta.source_version == src_version) && delta->delta.destination_version == dst_version) {
                     *out_index = i;
-                    return ResultSuccess();
+                    R_SUCCEED();
                 }
             }
 
             /* We didn't find the delta. */
-            return ncm::ResultDeltaNotFound();
+            R_THROW(ncm::ResultDeltaNotFound());
         }
 
         s32 CountContentExceptForMeta(const PatchMetaExtendedDataReader &reader, s32 delta_index) {
@@ -219,7 +221,7 @@ namespace ams::ncm {
         /* Assert that we copied the right number of infos. */
         AMS_ASSERT(count == fragment_count);
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result PackagedContentMetaReader::CalculateConvertFragmentOnlyInstallContentMetaSize(size_t *out_size, u32 source_version) const {
@@ -229,10 +231,11 @@ namespace ams::ncm {
         R_TRY(FindDeltaIndex(std::addressof(index), reader, source_version, this->GetKey().version));
 
         /* Get the fragment count. */
-        auto fragment_count = CountContentExceptForMeta(reader, index);
+        const auto fragment_count = CountContentExceptForMeta(reader, index);
 
         /* Recalculate. */
-        return CalculateSizeImpl<InstallContentMetaHeader, InstallContentInfo>(this->GetExtendedHeaderSize(), fragment_count + 1, 0, this->GetExtendedDataSize(), false);
+        *out_size = this->CalculateConvertFragmentOnlyInstallContentMetaSize(fragment_count);
+        R_SUCCEED();
     }
 
     void PackagedContentMetaReader::ConvertToContentMeta(void *dst, size_t size, const ContentInfo &meta) {
@@ -322,6 +325,115 @@ namespace ams::ncm {
             std::memcpy(reinterpret_cast<void *>(dst_addr), this->GetContentMetaInfo(i), sizeof(ContentMetaInfo));
             dst_addr += sizeof(ContentMetaInfo);
         }
+    }
+
+    Result MetaConverter::CountContentExceptForMeta(s32 *out, PatchMetaExtendedDataAccessor *accessor, const PatchDeltaHeader &header, s32 delta_index) {
+        /* Get the count. */
+        s32 count = 0;
+
+        for (auto i = 0; i < static_cast<int>(header.content_count); ++i) {
+            /* Get the delta content info. */
+            PackagedContentInfo content_info;
+            R_TRY(accessor->GetPatchDeltaContentInfo(std::addressof(content_info), delta_index, i));
+
+            if (content_info.GetType() != ContentType::Meta) {
+                ++count;
+            }
+        }
+
+        *out = count;
+        R_SUCCEED();
+    }
+
+    Result MetaConverter::FindDeltaIndex(s32 *out, PatchMetaExtendedDataAccessor *accessor, u32 source_version, u32 destination_version) {
+        /* Get the header. */
+        PatchMetaExtendedDataHeader header;
+        header.delta_count = 0;
+        R_TRY(accessor->GetHeader(std::addressof(header)));
+
+        /* Iterate over all deltas. */
+        for (s32 i = 0; i < static_cast<s32>(header.delta_count); i++) {
+            /* Get the current patch delta header. */
+            PatchDeltaHeader delta_header;
+            R_TRY(accessor->GetPatchDeltaHeader(std::addressof(delta_header), i));
+
+            /* Check if the current delta matches the versions. */
+            if ((source_version == 0 || delta_header.delta.source_version == source_version) && delta_header.delta.destination_version == destination_version) {
+                *out = i;
+                R_SUCCEED();
+            }
+        }
+
+        /* We didn't find the delta. */
+        R_THROW(ncm::ResultDeltaNotFound());
+    }
+
+    Result MetaConverter::GetFragmentOnlyInstallContentMeta(AutoBuffer *out, const InstallContentInfo &meta, const PackagedContentMetaReader &reader, PatchMetaExtendedDataAccessor *accessor, u32 source_version) {
+        /* Find the appropriate delta index. */
+        s32 delta_index = 0;
+        R_TRY(FindDeltaIndex(std::addressof(delta_index), accessor, source_version, reader.GetHeader()->version));
+
+        /* Get the delta header. */
+        PatchDeltaHeader delta_header;
+        R_TRY(accessor->GetPatchDeltaHeader(std::addressof(delta_header), delta_index));
+
+        /* Count content except for meta. */
+        s32 fragment_count = 0;
+        R_TRY(CountContentExceptForMeta(std::addressof(fragment_count), accessor, delta_header, delta_index));
+
+        /* Determine the required size. */
+        const size_t meta_size = reader.CalculateConvertFragmentOnlyInstallContentMetaSize(fragment_count);
+
+        /* Initialize the out buffer. */
+        R_TRY(out->Initialize(meta_size));
+
+        /* Prepare for conversion. */
+        const auto *packaged_header = reader.GetHeader();
+        uintptr_t dst_addr = reinterpret_cast<uintptr_t>(out->Get());
+
+        /* Convert the header. */
+        InstallContentMetaHeader header;
+        ConvertPackageContentMetaHeaderToInstallContentMetaHeader(std::addressof(header), *packaged_header);
+        header.install_type = ContentInstallType::FragmentOnly;
+
+        /* Set the content count. */
+        header.content_count = static_cast<u16>(fragment_count) + 1;
+
+        /* Copy the header. */
+        std::memcpy(reinterpret_cast<void *>(dst_addr), std::addressof(header), sizeof(header));
+        dst_addr += sizeof(header);
+
+        /* Copy the extended header. */
+        std::memcpy(reinterpret_cast<void *>(dst_addr), reader.GetExtendedHeader<void>(), packaged_header->extended_header_size);
+        dst_addr += packaged_header->extended_header_size;
+
+        /* Copy the top level meta. */
+        std::memcpy(reinterpret_cast<void *>(dst_addr), std::addressof(meta), sizeof(meta));
+        dst_addr += sizeof(meta);
+
+        s32 count = 0;
+        for (s32 i = 0; i < static_cast<s32>(delta_header.content_count); i++) {
+            /* Get the delta content info. */
+            PackagedContentInfo content_info;
+            R_TRY(accessor->GetPatchDeltaContentInfo(std::addressof(content_info), delta_index, i));
+
+            if (content_info.GetType() != ContentType::Meta) {
+                /* Create the install content info. */
+                InstallContentInfo install_content_info = InstallContentInfo::Make(content_info, packaged_header->type);
+
+                /* Copy the info. */
+                std::memcpy(reinterpret_cast<void *>(dst_addr), std::addressof(install_content_info), sizeof(InstallContentInfo));
+                dst_addr += sizeof(InstallContentInfo);
+
+                /* Increment the count. */
+                count++;
+            }
+        }
+
+        /* Assert that we copied the right number of infos. */
+        AMS_ASSERT(count == fragment_count);
+
+        R_SUCCEED();
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -14,6 +14,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <stratosphere.hpp>
+#include "ncm_extended_data_mapper.hpp"
 
 namespace ams::ncm {
 
@@ -52,33 +53,33 @@ namespace ams::ncm {
     }
 
     void InstallTaskBase::Cancel() {
-        std::scoped_lock lk(this->cancel_mutex);
-        this->cancel_requested = true;
+        std::scoped_lock lk(m_cancel_mutex);
+        m_cancel_requested = true;
     }
 
     void InstallTaskBase::ResetCancel() {
-        std::scoped_lock lk(this->cancel_mutex);
-        this->cancel_requested = false;
+        std::scoped_lock lk(m_cancel_mutex);
+        m_cancel_requested = false;
     }
 
     bool InstallTaskBase::IsCancelRequested() {
-        std::scoped_lock lk(this->cancel_mutex);
-        return this->cancel_requested;
+        std::scoped_lock lk(m_cancel_mutex);
+        return m_cancel_requested;
     }
 
     Result InstallTaskBase::Initialize(StorageId install_storage, InstallTaskDataBase *data, u32 config) {
         R_UNLESS(IsInstallableStorage(install_storage), ncm::ResultUnknownStorage());
 
-        this->install_storage = install_storage;
-        this->data = data;
-        this->config = config;
+        m_install_storage = install_storage;
+        m_data = data;
+        m_config = config;
 
-        return data->GetProgress(std::addressof(this->progress));
+        R_RETURN(data->GetProgress(std::addressof(m_progress)));
     }
 
     Result InstallTaskBase::Prepare() {
         R_TRY(this->SetLastResultOnFailure(this->PrepareImpl()));
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::GetPreparedPlaceHolderPath(Path *out_path, u64 id, ContentMetaType meta_type, ContentType type) {
@@ -87,8 +88,8 @@ namespace ams::ncm {
         R_TRY(this->CountInstallContentMetaData(std::addressof(count)));
 
         /* Iterate over content meta. */
-        std::optional<PlaceHolderId> placeholder_id;
-        std::optional<StorageId> storage_id;
+        util::optional<PlaceHolderId> placeholder_id;
+        util::optional<StorageId> storage_id;
         for (s32 i = 0; i < count; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
@@ -123,20 +124,20 @@ namespace ams::ncm {
         /* Get the path. */
         storage.GetPlaceHolderPath(out_path, *placeholder_id);
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::CalculateRequiredSize(s64 *out_size) {
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         s64 required_size = 0;
         /* Iterate over each entry. */
         for (s32 i = 0; i < count; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
             const auto reader = content_meta.GetReader();
 
             /* Sum the sizes from the content infos. */
@@ -150,7 +151,7 @@ namespace ams::ncm {
         }
 
         *out_size = required_size;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::PrepareImpl() {
@@ -172,19 +173,19 @@ namespace ams::ncm {
         }
 
         /* Signal prepare is completed. */
-        return this->OnPrepareComplete();
+        R_RETURN(this->OnPrepareComplete());
     }
 
     Result InstallTaskBase::Cleanup() {
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         /* Iterate over content meta. */
         for (s32 i = 0; i < count; i++) {
             /* Get the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
             /* Cleanup the content meta. */
             /* N doesn't check the result of this. */
@@ -192,21 +193,21 @@ namespace ams::ncm {
         }
 
         /* Cleanup the data and progress. */
-        R_TRY(this->data->Cleanup());
+        R_TRY(m_data->Cleanup());
         this->CleanupProgress();
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::CleanupOne(const InstallContentMeta &content_meta) {
         /* Obtain a reader and get the storage id. */
         const auto reader = content_meta.GetReader();
         const auto storage_id = reader.GetStorageId();
-        R_SUCCEED_IF(storage_id== StorageId::None);
+        R_SUCCEED_IF(storage_id == StorageId::None);
 
         /* Open the relevant content storage. */
         ContentStorage content_storage;
-        R_TRY(ncm::OpenContentStorage(&content_storage, storage_id));
+        R_TRY(ncm::OpenContentStorage(std::addressof(content_storage), storage_id));
 
         /* Iterate over content infos. */
         for (size_t i = 0; i < reader.GetContentCount(); i++) {
@@ -218,18 +219,18 @@ namespace ams::ncm {
             }
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::ListContentMetaKey(s32 *out_keys_written, StorageContentMetaKey *out_keys, s32 out_keys_count, s32 offset, ListContentMetaKeyFilter filter) {
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         /* Offset exceeds keys that can be written. */
         if (count <= offset) {
             *out_keys_written = 0;
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         if (filter == ListContentMetaKeyFilter::All) {
@@ -239,7 +240,7 @@ namespace ams::ncm {
             for (s32 i = offset; i < num_keys; i++) {
                 /* Obtain the content meta. */
                 InstallContentMeta content_meta;
-                R_TRY(this->data->Get(std::addressof(content_meta), i));
+                R_TRY(m_data->Get(std::addressof(content_meta), i));
 
                 /* Write output StorageContentMetaKey. */
                 const auto reader = content_meta.GetReader();
@@ -256,7 +257,7 @@ namespace ams::ncm {
             for (s32 i = 0; i < count; i++) {
                 /* Obtain the content meta. */
                 InstallContentMeta content_meta;
-                R_TRY(this->data->Get(std::addressof(content_meta), i));
+                R_TRY(m_data->Get(std::addressof(content_meta), i));
 
                 /* Create a reader and check if the content has been committed. */
                 const auto reader = content_meta.GetReader();
@@ -283,18 +284,18 @@ namespace ams::ncm {
             *out_keys_written = keys_written;
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::ListApplicationContentMetaKey(s32 *out_keys_written, ApplicationContentMetaKey *out_keys, s32 out_keys_count, s32 offset) {
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         /* Offset exceeds keys that can be written. */
         if (count <= offset) {
             *out_keys_written = 0;
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         /* Iterate over content meta. */
@@ -303,7 +304,7 @@ namespace ams::ncm {
         for (s32 i = offset; i < max; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
             /* Create a reader. */
             const auto reader = content_meta.GetReader();
@@ -319,12 +320,12 @@ namespace ams::ncm {
         }
 
         *out_keys_written = keys_written;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::Execute() {
         R_TRY(this->SetLastResultOnFailure(this->ExecuteImpl()));
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::ExecuteImpl() {
@@ -332,18 +333,18 @@ namespace ams::ncm {
 
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         /* Iterate over content meta. */
         for (s32 i = 0; i < count; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
-            /* Update the data (and check result) when we are done. */
-            const auto DoUpdate = [&]() ALWAYS_INLINE_LAMBDA { return this->data->Update(content_meta, i); };
+            /* Write all prepared content infos. */
             {
-                auto update_guard = SCOPE_GUARD { DoUpdate(); };
+                /* If we fail while writing, update (but don't check the result). */
+                ON_RESULT_FAILURE { m_data->Update(content_meta, i); };
 
                 /* Create a writer. */
                 const auto writer = content_meta.GetWriter();
@@ -358,11 +359,10 @@ namespace ams::ncm {
                         content_info->install_state = InstallState::Installed;
                     }
                 }
-
-                /* Cancel so we can check the result of updating. */
-                update_guard.Cancel();
             }
-            R_TRY(DoUpdate());
+
+            /* Update our data. */
+            R_TRY(m_data->Update(content_meta, i));
         }
 
         /* Execution has finished, signal this and update the state. */
@@ -370,13 +370,13 @@ namespace ams::ncm {
 
         this->SetProgressState(InstallProgressState::Downloaded);
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::PrepareAndExecute() {
         R_TRY(this->SetLastResultOnFailure(this->PrepareImpl()));
         R_TRY(this->SetLastResultOnFailure(this->ExecuteImpl()));
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::VerifyAllNotCommitted(const StorageContentMetaKey *keys, s32 num_keys) {
@@ -385,7 +385,7 @@ namespace ams::ncm {
 
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         s32 num_not_committed = 0;
 
@@ -393,7 +393,7 @@ namespace ams::ncm {
         for (s32 i = 0; i < count; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
             /* Create a reader. */
             const auto reader = content_meta.GetReader();
@@ -407,7 +407,7 @@ namespace ams::ncm {
 
         /* Ensure number of uncommitted keys equals the number of input keys. */
         R_UNLESS(num_not_committed == num_keys, ncm::ResultListPartiallyNotCommitted());
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::CommitImpl(const StorageContentMetaKey *keys, s32 num_keys) {
@@ -419,7 +419,7 @@ namespace ams::ncm {
 
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         /* List of storages to commit. */
         StorageList commit_list;
@@ -428,7 +428,7 @@ namespace ams::ncm {
         for (s32 i = 0; i < count; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
             /* Create a reader. */
             const auto reader         = content_meta.GetReader();
@@ -446,13 +446,10 @@ namespace ams::ncm {
                 continue;
             }
 
-            /* Helper for performing an update. */
-            const auto DoUpdate = [&]() ALWAYS_INLINE_LAMBDA { return this->data->Update(content_meta, i); };
-
             /* Commit the current meta. */
             {
                 /* Ensure that if something goes wrong during commit, we still try to update. */
-                auto update_guard = SCOPE_GUARD { DoUpdate(); };
+                ON_RESULT_FAILURE { m_data->Update(content_meta, i); };
 
                 /* Open a writer. */
                 const auto writer = content_meta.GetWriter();
@@ -464,7 +461,7 @@ namespace ams::ncm {
 
                 /* Open the content storage for this meta. */
                 ContentStorage content_storage;
-                R_TRY(OpenContentStorage(&content_storage, storage_id));
+                R_TRY(OpenContentStorage(std::addressof(content_storage), storage_id));
 
                 /* Open the content meta database for this meta. */
                 ContentMetaDatabase meta_db;
@@ -488,13 +485,10 @@ namespace ams::ncm {
 
                 /* Mark storage id to be committed later. */
                 commit_list.Push(reader.GetStorageId());
-
-                /* We successfully commited this meta, so we want to check for errors when updating. */
-                update_guard.Cancel();
             }
 
-            /* Try to update, checking for failure. */
-            R_TRY(DoUpdate());
+            /* Try to update our data. */
+            R_TRY(m_data->Update(content_meta, i));
         }
 
         /* Commit all applicable content meta databases. */
@@ -509,36 +503,35 @@ namespace ams::ncm {
             this->SetProgressState(InstallProgressState::Committed);
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::Commit(const StorageContentMetaKey *keys, s32 num_keys) {
-        auto fatal_guard = SCOPE_GUARD { SetProgressState(InstallProgressState::Fatal); };
-        R_TRY(this->SetLastResultOnFailure(this->CommitImpl(keys, num_keys)));
-        fatal_guard.Cancel();
-        return ResultSuccess();
+        ON_RESULT_FAILURE { this->SetProgressState(InstallProgressState::Fatal); };
+
+        R_RETURN(this->SetLastResultOnFailure(this->CommitImpl(keys, num_keys)));
     }
 
     Result InstallTaskBase::IncludesExFatDriver(bool *out) {
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         /* Iterate over content meta. */
         for (s32 i = 0; i < count; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
             /* Check if the attributes are set for including the exfat driver. */
             if (content_meta.GetReader().GetHeader()->attributes & ContentMetaAttribute_IncludesExFatDriver) {
                 *out = true;
-                return ResultSuccess();
+                R_SUCCEED();
             }
         }
 
         *out = false;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::WritePlaceHolderBuffer(InstallContentInfo *content_info, const void *data, size_t data_size) {
@@ -546,7 +539,7 @@ namespace ams::ncm {
 
         /* Open the content storage for the content info. */
         ContentStorage content_storage;
-        R_TRY(OpenContentStorage(&content_storage, content_info->storage_id));
+        R_TRY(OpenContentStorage(std::addressof(content_storage), content_info->storage_id));
 
         /* Write data to the placeholder. */
         R_TRY(content_storage.WritePlaceHolder(content_info->placeholder_id, content_info->written, data, data_size));
@@ -559,26 +552,26 @@ namespace ams::ncm {
         }
 
         /* Update the hash for the new data. */
-        this->sha256_generator.Update(data, data_size);
-        return ResultSuccess();
+        m_sha256_generator.Update(data, data_size);
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::WritePlaceHolder(const ContentMetaKey &key, InstallContentInfo *content_info) {
         if (content_info->is_sha256_calculated) {
             /* Update the hash with the buffered data. */
-            this->sha256_generator.InitializeWithContext(std::addressof(content_info->context));
-            this->sha256_generator.Update(content_info->buffered_data, content_info->buffered_data_size);
+            m_sha256_generator.InitializeWithContext(std::addressof(content_info->context));
+            m_sha256_generator.Update(content_info->buffered_data, content_info->buffered_data_size);
         } else {
             /* Initialize the generator. */
-            this->sha256_generator.Initialize();
+            m_sha256_generator.Initialize();
         }
 
         {
             ON_SCOPE_EXIT {
                 /* Update this content info's sha256 data. */
-                this->sha256_generator.GetContext(std::addressof(content_info->context));
-                content_info->buffered_data_size = this->sha256_generator.GetBufferedDataSize();
-                this->sha256_generator.GetBufferedData(content_info->buffered_data, this->sha256_generator.GetBufferedDataSize());
+                m_sha256_generator.GetContext(std::addressof(content_info->context));
+                content_info->buffered_data_size = m_sha256_generator.GetBufferedDataSize();
+                m_sha256_generator.GetBufferedData(content_info->buffered_data, m_sha256_generator.GetBufferedDataSize());
                 content_info->is_sha256_calculated = true;
             };
 
@@ -589,17 +582,17 @@ namespace ams::ncm {
         /* Compare generated hash to expected hash if verification required. */
         if (content_info->verify_digest) {
             u8 hash[crypto::Sha256Generator::HashSize];
-            this->sha256_generator.GetHash(hash, crypto::Sha256Generator::HashSize);
+            m_sha256_generator.GetHash(hash, crypto::Sha256Generator::HashSize);
             R_UNLESS(std::memcmp(hash, content_info->digest.data, crypto::Sha256Generator::HashSize) == 0, ncm::ResultInvalidContentHash());
         }
 
-        if (hos::GetVersion() >= hos::Version_2_0_0 && !(this->config & InstallConfig_IgnoreTicket)) {
+        if (hos::GetVersion() >= hos::Version_2_0_0 && !(m_config & InstallConfig_IgnoreTicket)) {
             ncm::RightsId rights_id;
             {
                 /* Open the content storage and obtain the rights id. */
                 ncm::ContentStorage storage;
                 R_TRY(OpenContentStorage(std::addressof(storage), content_info->storage_id));
-                R_TRY(storage.GetRightsId(std::addressof(rights_id), content_info->placeholder_id));
+                R_TRY(storage.GetRightsId(std::addressof(rights_id), content_info->placeholder_id, content_info->GetContentAttributes()));
             }
 
             /* Install a ticket if necessary. */
@@ -610,7 +603,7 @@ namespace ams::ncm {
             }
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     bool InstallTaskBase::IsNecessaryInstallTicket(const fs::RightsId &rights_id) {
@@ -630,25 +623,24 @@ namespace ams::ncm {
 
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         for (s32 i = 0; i < count; i++) {
             R_UNLESS(!this->IsCancelRequested(), ncm::ResultCreatePlaceHolderCancelled());
 
-            static os::Mutex s_placeholder_mutex(false);
+            AMS_FUNCTION_LOCAL_STATIC_CONSTINIT(os::SdkMutex, s_placeholder_mutex);
             std::scoped_lock lk(s_placeholder_mutex);
 
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
             /* Update the data (and check result) when we are done. */
-            const auto DoUpdate = [&]() ALWAYS_INLINE_LAMBDA { return this->data->Update(content_meta, i); };
             {
-                auto update_guard = SCOPE_GUARD { DoUpdate(); };
+                ON_RESULT_FAILURE { m_data->Update(content_meta, i); };
 
                 /* Automatically choose a suitable storage id. */
                 auto reader = content_meta.GetReader();
-                StorageId storage_id;
+                StorageId storage_id = StorageId::None;
                 if (reader.GetStorageId() != StorageId::None) {
                     storage_id = reader.GetStorageId();
                 } else {
@@ -658,7 +650,7 @@ namespace ams::ncm {
 
                 /* Open the relevant content storage. */
                 ContentStorage content_storage;
-                R_TRY(ncm::OpenContentStorage(&content_storage, storage_id));
+                R_TRY(ncm::OpenContentStorage(std::addressof(content_storage), storage_id));
 
                 /* Update the storage id in the header. */
                 auto writer = content_meta.GetWriter();
@@ -670,7 +662,7 @@ namespace ams::ncm {
 
                     /* Check if we have the content already exists. */
                     bool has_content;
-                    R_TRY(content_storage.Has(&has_content, content_info->GetId()));
+                    R_TRY(content_storage.Has(std::addressof(has_content), content_info->GetId()));
 
                     if (has_content) {
                         /* Add the size of installed content infos to the total size. */
@@ -705,24 +697,23 @@ namespace ams::ncm {
                     /* Add the size of this content info to the total size. */
                     total_size += content_info->GetSize();
                 }
-
-                /* Cancel so that we can check the result of updating. */
-                update_guard.Cancel();
             }
-            R_TRY(DoUpdate());
+
+            /* Try to update our data. */
+            R_TRY(m_data->Update(content_meta, i));
         }
 
         this->SetTotalSize(total_size);
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
-    Result InstallTaskBase::WriteContentMetaToPlaceHolder(InstallContentInfo *out_install_content_info, ContentStorage *storage, const InstallContentMetaInfo &meta_info, std::optional<bool> is_temporary) {
+    Result InstallTaskBase::WriteContentMetaToPlaceHolder(InstallContentInfo *out_install_content_info, ContentStorage *storage, const InstallContentMetaInfo &meta_info, util::optional<bool> is_temporary) {
         /* Generate a placeholder id. */
         auto placeholder_id = storage->GeneratePlaceHolderId();
 
         /* Create the placeholder. */
         R_TRY(storage->CreatePlaceHolder(placeholder_id, meta_info.content_id, meta_info.content_size));
-        auto placeholder_guard = SCOPE_GUARD { storage->DeletePlaceHolder(placeholder_id); };
+        ON_RESULT_FAILURE { storage->DeletePlaceHolder(placeholder_id); };
 
         /* Output install content info. */
         *out_install_content_info = this->MakeInstallContentInfoFrom(meta_info, placeholder_id, is_temporary);
@@ -731,28 +722,28 @@ namespace ams::ncm {
         R_TRY(this->WritePlaceHolder(meta_info.key, out_install_content_info));
 
         /* Don't delete the placeholder. Set state to installed. */
-        placeholder_guard.Cancel();
         out_install_content_info->install_state = InstallState::Installed;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
-    Result InstallTaskBase::PrepareContentMeta(const InstallContentMetaInfo &meta_info, std::optional<ContentMetaKey> expected_key, std::optional<u32> source_version) {
+    Result InstallTaskBase::PrepareContentMeta(const InstallContentMetaInfo &meta_info, util::optional<ContentMetaKey> expected_key, util::optional<u32> source_version) {
         /* Open the BuiltInSystem content storage. */
         ContentStorage content_storage;
-        R_TRY(OpenContentStorage(&content_storage, StorageId::BuiltInSystem));
+        R_TRY(OpenContentStorage(std::addressof(content_storage), StorageId::BuiltInSystem));
 
         /* Write content meta to a placeholder. */
         InstallContentInfo content_info;
-        R_TRY(this->WriteContentMetaToPlaceHolder(std::addressof(content_info), std::addressof(content_storage), meta_info, std::nullopt));
+        R_TRY(this->WriteContentMetaToPlaceHolder(std::addressof(content_info), std::addressof(content_storage), meta_info, util::nullopt));
 
         /* Get the path of the placeholder. */
         Path path;
         content_storage.GetPlaceHolderPath(std::addressof(path), content_info.GetPlaceHolderId());
 
-        const bool is_temporary = content_info.is_temporary;
-        auto temporary_guard = SCOPE_GUARD { content_storage.DeletePlaceHolder(content_info.GetPlaceHolderId()); };
+        /* If we fail, delete the placeholder. */
+        ON_RESULT_FAILURE { content_storage.DeletePlaceHolder(content_info.GetPlaceHolderId()); };
 
         /* Create a new temporary InstallContentInfo if relevant. */
+        const bool is_temporary = content_info.is_temporary;
         if (is_temporary) {
             content_info = {
                 .digest         = content_info.digest,
@@ -768,7 +759,7 @@ namespace ams::ncm {
         R_TRY(this->GetInstallContentMetaDataFromPath(std::addressof(meta), path, content_info, source_version));
 
         /* Update the storage id if BuiltInSystem. */
-        if (this->install_storage == StorageId::BuiltInSystem) {
+        if (m_install_storage == StorageId::BuiltInSystem) {
             InstallContentMetaWriter writer(meta.Get(), meta.GetSize());
             writer.SetStorageId(StorageId::BuiltInSystem);
         }
@@ -780,13 +771,14 @@ namespace ams::ncm {
         }
 
         /* Push the data. */
-        R_TRY(this->data->Push(meta.Get(), meta.GetSize()));
+        R_TRY(m_data->Push(meta.Get(), meta.GetSize()));
 
-        /* Don't delete the placeholder if not temporary. */
-        if (!is_temporary) {
-            temporary_guard.Cancel();
+        /* If the placeholder is temporary, delete it. */
+        if (is_temporary) {
+            content_storage.DeletePlaceHolder(content_info.GetPlaceHolderId());
         }
-        return ResultSuccess();
+
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::PrepareContentMeta(ContentId content_id, s64 size, ContentMetaType meta_type, AutoBuffer *buffer) {
@@ -798,11 +790,11 @@ namespace ams::ncm {
         R_TRY(tmp_buffer.Initialize(reader.CalculateConvertInstallContentMetaSize()));
 
         /* Convert packaged content meta to install content meta. */
-        reader.ConvertToInstallContentMeta(tmp_buffer.Get(), tmp_buffer.GetSize(), InstallContentInfo::Make(ContentInfo::Make(content_id, size, ContentType::Meta), meta_type));
+        reader.ConvertToInstallContentMeta(tmp_buffer.Get(), tmp_buffer.GetSize(), InstallContentInfo::Make(ContentInfo::Make(content_id, size, ContentInfo::DefaultContentAttributes, ContentType::Meta), meta_type));
 
         /* Push the content meta. */
-        this->data->Push(tmp_buffer.Get(), tmp_buffer.GetSize());
-        return ResultSuccess();
+        m_data->Push(tmp_buffer.Get(), tmp_buffer.GetSize());
+        R_SUCCEED();
     }
 
     void InstallTaskBase::PrepareAgain() {
@@ -810,12 +802,12 @@ namespace ams::ncm {
     }
 
     Result InstallTaskBase::PrepareDependency() {
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::PrepareSystemUpdateDependency() {
         /* Cleanup on failure. */
-        auto guard = SCOPE_GUARD { this->Cleanup(); };
+        ON_RESULT_FAILURE { this->Cleanup(); };
 
         /* Count the number of content meta entries. */
         s32 count;
@@ -825,7 +817,7 @@ namespace ams::ncm {
         for (s32 i = 0; i < count; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
             /* Create a reader. */
             const InstallContentMetaReader reader = content_meta.GetReader();
@@ -835,10 +827,13 @@ namespace ams::ncm {
                 continue;
             }
 
+            /* Get the content info. */
+            const auto *content_info = reader.GetContentInfo(ContentType::Meta);
+
             /* List content meta infos. */
             std::unique_ptr<ContentMetaInfo[]> content_meta_infos;
             s32 num_content_meta_infos;
-            R_TRY(this->ReadContentMetaInfoList(std::addressof(num_content_meta_infos), std::addressof(content_meta_infos), reader.GetKey()));
+            R_TRY(this->ReadContentMetaInfoList(std::addressof(num_content_meta_infos), std::addressof(content_meta_infos), reader.GetKey(), content_info->GetContentAttributes()));
 
             /* Iterate over content meta infos. */
             for (s32 j = 0; j < num_content_meta_infos; j++) {
@@ -846,14 +841,13 @@ namespace ams::ncm {
                 const ContentMetaKey content_meta_info_key = content_meta_info.ToKey();
 
                 /* If exfat driver is not included or is required, prepare the content meta. */
-                if (!(content_meta_info.attributes & ContentMetaAttribute_IncludesExFatDriver) || (this->config & InstallConfig_RequiresExFatDriver)) {
+                if (!(content_meta_info.attributes & ContentMetaAttribute_IncludesExFatDriver) || (m_config & InstallConfig_RequiresExFatDriver)) {
                     R_TRY(this->PrepareContentMetaIfLatest(content_meta_info_key));
                 }
             }
         }
 
-        guard.Cancel();
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::GetSystemUpdateTaskApplyInfo(SystemUpdateTaskApplyInfo *out) {
@@ -863,7 +857,7 @@ namespace ams::ncm {
 
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         /* Iterate over content meta. */
         for (s32 i = 0; i < count; i++) {
@@ -879,10 +873,13 @@ namespace ams::ncm {
                 continue;
             }
 
+            /* Get the content info. */
+            const auto *content_info = reader.GetContentInfo(ContentType::Meta);
+
             /* List content meta infos. */
             std::unique_ptr<ContentMetaInfo[]> content_meta_infos;
             s32 num_content_meta_infos;
-            R_TRY(this->ReadContentMetaInfoList(std::addressof(num_content_meta_infos), std::addressof(content_meta_infos), reader.GetKey()));
+            R_TRY(this->ReadContentMetaInfoList(std::addressof(num_content_meta_infos), std::addressof(content_meta_infos), reader.GetKey(), content_info->GetContentAttributes()));
 
             /* Iterate over content meta infos. */
             for (s32 j = 0; j < num_content_meta_infos; j++) {
@@ -899,7 +896,7 @@ namespace ams::ncm {
                 } R_END_TRY_CATCH;
 
                 /* Exfat driver included, but not required. */
-                if (content_meta_info.attributes & ContentMetaAttribute_IncludesExFatDriver && !(this->config & InstallConfig_RequiresExFatDriver)) {
+                if (content_meta_info.attributes & ContentMetaAttribute_IncludesExFatDriver && !(m_config & InstallConfig_RequiresExFatDriver)) {
                     continue;
                 }
 
@@ -911,13 +908,13 @@ namespace ams::ncm {
                 /* If not rebootless, a reboot is required. */
                 if (!(content_meta_info.attributes & ContentMetaAttribute_Rebootless)) {
                     *out = SystemUpdateTaskApplyInfo::RequireReboot;
-                    return ResultSuccess();
+                    R_SUCCEED();
                 }
             }
         }
 
         *out = SystemUpdateTaskApplyInfo::RequireNoReboot;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::PrepareContentMetaIfLatest(const ContentMetaKey &key) {
@@ -929,15 +926,15 @@ namespace ams::ncm {
             /* Get and prepare install content meta info. */
             InstallContentMetaInfo install_content_meta_info;
             R_TRY(this->GetInstallContentMetaInfo(std::addressof(install_content_meta_info), key));
-            R_TRY(this->PrepareContentMeta(install_content_meta_info, key, std::nullopt));
+            R_TRY(this->PrepareContentMeta(install_content_meta_info, key, util::nullopt));
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::IsNewerThanInstalled(bool *out, const ContentMetaKey &key) {
         /* Obtain a list of suitable storage ids. */
-        auto storage_list = GetStorageList(this->install_storage);
+        auto storage_list = GetStorageList(m_install_storage);
 
         /* Iterate over storage ids. */
         for (s32 i = 0; i < storage_list.Count(); i++) {
@@ -959,21 +956,21 @@ namespace ams::ncm {
             /* Check if installed key is newer. */
             if (latest_key.version >= key.version) {
                 *out = false;
-                return ResultSuccess();
+                R_SUCCEED();
             }
         }
 
         /* Input key is newer. */
         *out = true;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::CountInstallContentMetaData(s32 *out_count) {
-        return this->data->Count(out_count);
+        R_RETURN(m_data->Count(out_count));
     }
 
     Result InstallTaskBase::GetInstallContentMetaData(InstallContentMeta *out_content_meta, s32 index) {
-        return this->data->Get(out_content_meta, index);
+        R_RETURN(m_data->Get(out_content_meta, index));
     }
 
     Result InstallTaskBase::DeleteInstallContentMetaData(const ContentMetaKey *keys, s32 num_keys) {
@@ -994,15 +991,13 @@ namespace ams::ncm {
         }
 
         /* Delete the data if count < 1. */
-        return this->data->Delete(keys, num_keys);
+        R_RETURN(m_data->Delete(keys, num_keys));
     }
 
-    Result InstallTaskBase::GetInstallContentMetaDataFromPath(AutoBuffer *out, const Path &path, const InstallContentInfo &content_info, std::optional<u32> source_version) {
+    Result InstallTaskBase::GetInstallContentMetaDataFromPath(AutoBuffer *out, const Path &path, const InstallContentInfo &content_info, util::optional<u32> source_version) {
+        fs::ContentAttributes attr;
         AutoBuffer meta;
-        {
-            fs::ScopedAutoAbortDisabler aad;
-            R_TRY(ReadContentMetaPath(std::addressof(meta), path.str));
-        }
+        R_TRY(TryReadContentMetaPath(std::addressof(attr), std::addressof(meta), path.str, ReadContentMetaPathWithoutExtendedDataOrDigestSuppressingFsAbort));
 
         /* Create a reader. */
         PackagedContentMetaReader reader(meta.Get(), meta.GetSize());
@@ -1010,10 +1005,20 @@ namespace ams::ncm {
 
         AutoBuffer install_meta_data;
         if (source_version) {
-            /* Convert to fragment only install content meta. */
-            R_TRY(reader.CalculateConvertFragmentOnlyInstallContentMetaSize(std::addressof(meta_size), *source_version));
-            R_TRY(install_meta_data.Initialize(meta_size));
-            reader.ConvertToFragmentOnlyInstallContentMeta(install_meta_data.Get(), install_meta_data.GetSize(), content_info, *source_version);
+            /* Declare buffers. */
+            constexpr size_t BufferCount = 2;
+            constexpr size_t BufferSize  = 3_KB;
+            u8 buffers[BufferCount][BufferSize];
+
+            /* Create a mapper. */
+            auto mapper = MultiCacheReadonlyMapper<4>(Span<u8>(buffers[0], sizeof(buffers[0])), Span<u8>(buffers[1], sizeof(buffers[1])));
+            R_TRY(mapper.Initialize(path.str, static_cast<fs::ContentAttributes>(static_cast<u8>(attr) & fs::ContentAttributes_All), true));
+
+            /* Create an accessor. */
+            auto accessor = PatchMetaExtendedDataAccessor{std::addressof(mapper)};
+
+            /* Convert to fragment only install meta. */
+            R_TRY(MetaConverter::GetFragmentOnlyInstallContentMeta(std::addressof(install_meta_data), content_info, reader, std::addressof(accessor), source_version.value()));
         } else {
             /* Convert to install content meta. */
             meta_size = reader.CalculateConvertInstallContentMetaSize();
@@ -1024,25 +1029,25 @@ namespace ams::ncm {
         /* Set output. */
         *out = std::move(install_meta_data);
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
-    InstallContentInfo InstallTaskBase::MakeInstallContentInfoFrom(const InstallContentMetaInfo &info, const PlaceHolderId &placeholder_id, std::optional<bool> is_tmp) {
+    InstallContentInfo InstallTaskBase::MakeInstallContentInfoFrom(const InstallContentMetaInfo &info, const PlaceHolderId &placeholder_id, util::optional<bool> is_tmp) {
         return {
             .digest         = info.digest,
-            .info           = ContentInfo::Make(info.content_id, info.content_size, ContentType::Meta, 0),
+            .info           = ContentInfo::Make(info.content_id, info.content_size, ContentInfo::DefaultContentAttributes, ContentType::Meta, 0),
             .placeholder_id = placeholder_id,
             .meta_type      = info.key.type,
             .install_state  = InstallState::Prepared,
             .verify_digest  = info.verify_digest,
             .storage_id     = StorageId::BuiltInSystem,
-            .is_temporary   = is_tmp ? *is_tmp : (this->install_storage != StorageId::BuiltInSystem),
+            .is_temporary   = is_tmp ? *is_tmp : (m_install_storage != StorageId::BuiltInSystem),
         };
     }
 
     InstallProgress InstallTaskBase::GetProgress() {
-        std::scoped_lock lk(this->progress_mutex);
-        return this->progress;
+        std::scoped_lock lk(m_progress_mutex);
+        return m_progress;
     }
 
     void InstallTaskBase::ResetLastResult() {
@@ -1050,67 +1055,67 @@ namespace ams::ncm {
     }
 
     void InstallTaskBase::SetTotalSize(s64 size) {
-        std::scoped_lock(this->progress_mutex);
-        this->progress.total_size = size;
+        std::scoped_lock lk(m_progress_mutex);
+        m_progress.total_size = size;
     }
 
     void InstallTaskBase::IncrementProgress(s64 size) {
-        std::scoped_lock lk(this->progress_mutex);
-        this->progress.installed_size += size;
+        std::scoped_lock lk(m_progress_mutex);
+        m_progress.installed_size += size;
     }
 
     void InstallTaskBase::SetLastResult(Result last_result) {
-        std::scoped_lock lk(this->progress_mutex);
-        this->data->SetLastResult(last_result);
-        this->progress.SetLastResult(last_result);
+        std::scoped_lock lk(m_progress_mutex);
+        m_data->SetLastResult(last_result);
+        m_progress.SetLastResult(last_result);
     }
 
     void InstallTaskBase::CleanupProgress() {
-        std::scoped_lock(this->progress_mutex);
-        this->progress = {};
+        std::scoped_lock lk(m_progress_mutex);
+        m_progress = {};
     }
 
     InstallThroughput InstallTaskBase::GetThroughput() {
-        std::scoped_lock lk(this->throughput_mutex);
-        return this->throughput;
+        std::scoped_lock lk(m_throughput_mutex);
+        return m_throughput;
     }
 
     void InstallTaskBase::ResetThroughputMeasurement() {
-        std::scoped_lock lk(this->throughput_mutex);
-        this->throughput = { .elapsed_time = TimeSpan() };
-        this->throughput_start_time = TimeSpan();
+        std::scoped_lock lk(m_throughput_mutex);
+        m_throughput = { .elapsed_time = TimeSpan() };
+        m_throughput_start_time = TimeSpan();
     }
 
     void InstallTaskBase::StartThroughputMeasurement() {
-        std::scoped_lock lk(this->throughput_mutex);
-        this->throughput = { .elapsed_time = TimeSpan() };
-        this->throughput_start_time = os::GetSystemTick().ToTimeSpan();
+        std::scoped_lock lk(m_throughput_mutex);
+        m_throughput = { .elapsed_time = TimeSpan() };
+        m_throughput_start_time = os::GetSystemTick().ToTimeSpan();
     }
 
     void InstallTaskBase::UpdateThroughputMeasurement(s64 throughput) {
-        std::scoped_lock lk(this->throughput_mutex);
+        std::scoped_lock lk(m_throughput_mutex);
 
         /* Update throughput only if start time has been set. */
-        if (this->throughput_start_time.GetNanoSeconds() != 0) {
-            this->throughput.installed += throughput;
-            this->throughput.elapsed_time = os::GetSystemTick().ToTimeSpan() - this->throughput_start_time;
+        if (m_throughput_start_time.GetNanoSeconds() != 0) {
+            m_throughput.installed += throughput;
+            m_throughput.elapsed_time = os::GetSystemTick().ToTimeSpan() - m_throughput_start_time;
         }
     }
 
     Result InstallTaskBase::CalculateContentsSize(s64 *out_size, const ContentMetaKey &key, StorageId storage_id) {
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         /* Open the content storage. */
         ContentStorage content_storage;
-        R_TRY(ncm::OpenContentStorage(&content_storage, storage_id));
+        R_TRY(ncm::OpenContentStorage(std::addressof(content_storage), storage_id));
 
         /* Iterate over content meta. */
         for (s32 i = 0; i < count; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
             /* Create a reader. */
             const InstallContentMetaReader reader = content_meta.GetReader();
@@ -1148,21 +1153,21 @@ namespace ams::ncm {
             }
 
             /* No need to look for any further keys. */
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         *out_size = 0;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
-    Result InstallTaskBase::ReadContentMetaInfoList(s32 *out_count, std::unique_ptr<ContentMetaInfo[]> *out_meta_infos, const ContentMetaKey &key) {
+    Result InstallTaskBase::ReadContentMetaInfoList(s32 *out_count, std::unique_ptr<ContentMetaInfo[]> *out_meta_infos, const ContentMetaKey &key, fs::ContentAttributes attr) {
         /* Get the install content meta info. */
         InstallContentMetaInfo install_content_meta_info;
         R_TRY(this->GetInstallContentMetaInfo(std::addressof(install_content_meta_info), key));
 
         /* Open the BuiltInSystem content storage. */
         ContentStorage content_storage;
-        R_TRY(ncm::OpenContentStorage(&content_storage, StorageId::BuiltInSystem));
+        R_TRY(ncm::OpenContentStorage(std::addressof(content_storage), StorageId::BuiltInSystem));
 
         /* Write content meta to a placeholder. */
         InstallContentInfo content_info;
@@ -1175,17 +1180,17 @@ namespace ams::ncm {
         content_storage.GetPlaceHolderPath(std::addressof(path), placeholder_id);
 
         /* Read the variation list. */
-        R_TRY(ReadVariationContentMetaInfoList(out_count, out_meta_infos, path, this->firmware_variation_id));
+        R_TRY(ReadVariationContentMetaInfoList(out_count, out_meta_infos, path, attr, m_firmware_variation_id));
 
         /* Delete the placeholder. */
         content_storage.DeletePlaceHolder(placeholder_id);
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::FindMaxRequiredApplicationVersion(u32 *out) {
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         u32 max_version = 0;
 
@@ -1193,7 +1198,7 @@ namespace ams::ncm {
         for (s32 i = 0; i < count; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
             /* Create a reader. */
             const InstallContentMetaReader reader = content_meta.GetReader();
@@ -1208,7 +1213,7 @@ namespace ams::ncm {
         }
 
         *out = max_version;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::ListOccupiedSize(s32 *out_written, InstallTaskOccupiedSize *out_list, s32 out_list_size, s32 offset) {
@@ -1216,14 +1221,14 @@ namespace ams::ncm {
 
         /* Count the number of content meta entries. */
         s32 data_count;
-        R_TRY(this->data->Count(std::addressof(data_count)));
+        R_TRY(m_data->Count(std::addressof(data_count)));
 
         /* Iterate over content meta. */
         s32 count = 0;
         for (s32 i = offset; i < data_count && count < out_list_size; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
             /* Create a reader. */
             const InstallContentMetaReader reader = content_meta.GetReader();
@@ -1265,19 +1270,19 @@ namespace ams::ncm {
         /* Write the out count. */
         *out_written = count;
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     void InstallTaskBase::SetProgressState(InstallProgressState state) {
-        std::scoped_lock(this->progress_mutex);
-        this->data->SetState(state);
-        this->progress.state = state;
+        std::scoped_lock lk(m_progress_mutex);
+        m_data->SetState(state);
+        m_progress.state = state;
     }
 
     Result InstallTaskBase::FindMaxRequiredSystemVersion(u32 *out) {
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         u32 max_version = 0;
 
@@ -1285,7 +1290,7 @@ namespace ams::ncm {
         for (s32 i = 0; i < count; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
             /* Create a reader. */
             const InstallContentMetaReader reader = content_meta.GetReader();
@@ -1308,7 +1313,7 @@ namespace ams::ncm {
         }
 
         *out = max_version;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::CanContinue() {
@@ -1324,13 +1329,13 @@ namespace ams::ncm {
                 break;
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result InstallTaskBase::ListRightsIds(s32 *out_count, Span<RightsId> out_span, const ContentMetaKey &key, s32 offset) {
         /* Count the number of content meta entries. */
         s32 count;
-        R_TRY(this->data->Count(std::addressof(count)));
+        R_TRY(m_data->Count(std::addressof(count)));
 
         /* Ensure count is >= 1. */
         R_UNLESS(count >= 1, ncm::ResultContentMetaNotFound());
@@ -1339,18 +1344,18 @@ namespace ams::ncm {
         for (s32 i = 0; i < count; i++) {
             /* Obtain the content meta. */
             InstallContentMeta content_meta;
-            R_TRY(this->data->Get(std::addressof(content_meta), i));
+            R_TRY(m_data->Get(std::addressof(content_meta), i));
 
             /* Create a reader. */
             const InstallContentMetaReader reader = content_meta.GetReader();
 
             /* List rights ids if the reader's key matches ours. */
             if (reader.GetKey() == key) {
-                return this->ListRightsIdsByInstallContentMeta(out_count, out_span, content_meta, offset);
+                R_RETURN(this->ListRightsIdsByInstallContentMeta(out_count, out_span, content_meta, offset));
             }
         }
 
-        return ncm::ResultContentMetaNotFound();
+        R_THROW(ncm::ResultContentMetaNotFound());
     }
 
     Result InstallTaskBase::ListRightsIdsByInstallContentMeta(s32 *out_count, Span<RightsId> out_span, const InstallContentMeta &content_meta, s32 offset) {
@@ -1358,7 +1363,7 @@ namespace ams::ncm {
         /* Thus, we have nothing to list. */
         if (offset > 0) {
             *out_count = 0;
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         /* Create a reader. */
@@ -1375,11 +1380,11 @@ namespace ams::ncm {
 
             /* Open the relevant content storage. */
             ContentStorage content_storage;
-            R_TRY(ncm::OpenContentStorage(&content_storage, content_info->storage_id));
+            R_TRY(ncm::OpenContentStorage(std::addressof(content_storage), content_info->storage_id));
 
             /* Get the rights id. */
             RightsId rights_id;
-            R_TRY(content_storage.GetRightsId(std::addressof(rights_id), content_info->GetPlaceHolderId()));
+            R_TRY(content_storage.GetRightsId(std::addressof(rights_id), content_info->GetPlaceHolderId(), content_info->GetContentAttributes()));
 
             /* Skip empty rights ids. */
             if (rights_id.id == fs::InvalidRightsId) {
@@ -1393,6 +1398,6 @@ namespace ams::ncm {
         /* Sort and remove duplicate ids from the output span. */
         std::sort(out_span.begin(), out_span.end());
         *out_count = std::distance(out_span.begin(), std::unique(out_span.begin(), out_span.end()));
-        return ResultSuccess();
+        R_SUCCEED();
     }
 }

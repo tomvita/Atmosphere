@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,11 +17,13 @@
 
 namespace ams::nim {
 
+    #if defined(ATMOSPHERE_OS_HORIZON)
     namespace {
 
-        bool g_initialized;
+        constinit bool g_initialized;
 
     }
+
     /* Management. */
     void InitializeForNetworkInstallManager() {
         AMS_ASSERT(!g_initialized);
@@ -38,7 +40,7 @@ namespace ams::nim {
     /* Service API. */
     Result DestroySystemUpdateTask(const SystemUpdateTaskId &id) {
         static_assert(sizeof(SystemUpdateTaskId) == sizeof(::NimSystemUpdateTaskId));
-        return nimDestroySystemUpdateTask(reinterpret_cast<const ::NimSystemUpdateTaskId *>(std::addressof(id)));
+        R_RETURN(nimDestroySystemUpdateTask(reinterpret_cast<const ::NimSystemUpdateTaskId *>(std::addressof(id))));
     }
 
     s32 ListSystemUpdateTask(SystemUpdateTaskId *out_list, size_t out_list_size) {
@@ -49,5 +51,24 @@ namespace ams::nim {
 
         return count;
     }
+    #else
+    /* Management. */
+    void InitializeForNetworkInstallManager() {
+        AMS_ABORT("TODO: nim logic on non-libnx platform");
+    }
+
+    void FinalizeForNetworkInstallManager() {
+        AMS_ABORT("TODO: nim logic on non-libnx platform");
+    }
+
+    /* Service API. */
+    Result DestroySystemUpdateTask(const SystemUpdateTaskId &) {
+        AMS_ABORT("TODO: nim logic on non-libnx platform");
+    }
+
+    s32 ListSystemUpdateTask(SystemUpdateTaskId *, size_t) {
+        AMS_ABORT("TODO: nim logic on non-libnx platform");
+    }
+    #endif
 
 }

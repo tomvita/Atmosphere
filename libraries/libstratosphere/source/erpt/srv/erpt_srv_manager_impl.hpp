@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,23 +18,25 @@
 
 namespace ams::erpt::srv {
 
-    class ManagerImpl final : public util::IntrusiveListBaseNode<ManagerImpl> {
+    class ManagerImpl : public util::IntrusiveListBaseNode<ManagerImpl> {
         private:
-            os::SystemEvent system_event;
+            os::SystemEvent m_system_event;
         public:
             ManagerImpl();
             ~ManagerImpl();
         private:
             void NotifyOne();
         public:
-            static Result NotifyAll();
+            static void NotifyAll();
         public:
             Result GetReportList(const ams::sf::OutBuffer &out_list, ReportType type_filter);
             Result GetEvent(ams::sf::OutCopyHandle out);
             Result CleanupReports();
             Result DeleteReport(const ReportId &report_id);
             Result GetStorageUsageStatistics(ams::sf::Out<StorageUsageStatistics> out);
-            Result GetAttachmentList(const ams::sf::OutBuffer &out_buf, const ReportId &report_id);
+            Result GetAttachmentListDeprecated(const ams::sf::OutBuffer &out_buf, const ReportId &report_id);
+            Result GetAttachmentList(ams::sf::Out<u32> out_count, const ams::sf::OutBuffer &out_buf, const ReportId &report_id);
+            Result GetReportSizeMax(ams::sf::Out<u32> out);
     };
     static_assert(erpt::sf::IsIManager<ManagerImpl>);
 

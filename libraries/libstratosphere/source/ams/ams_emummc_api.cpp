@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -57,10 +57,10 @@ namespace ams::emummc {
         };
 
         /* Globals. */
-        os::Mutex g_lock(false);
-        ExosphereConfig g_exo_config;
-        bool g_is_emummc;
-        bool g_has_cached;
+        constinit os::SdkMutex g_lock;
+        constinit ExosphereConfig g_exo_config = {};
+        constinit bool g_is_emummc;
+        constinit bool g_has_cached;
 
         /* Helpers. */
         void CacheValues() {
@@ -73,29 +73,37 @@ namespace ams::emummc {
             /* Retrieve and cache values. */
             {
 
-                typename std::aligned_storage<2 * (MaxDirLen + 1), os::MemoryPageSize>::type path_storage;
+                alignas(os::MemoryPageSize) std::byte path_storage[2 * (MaxDirLen + 1)];
 
                 struct {
                     char file_path[MaxDirLen + 1];
                     char nintendo_path[MaxDirLen + 1];
-                } *paths = reinterpret_cast<decltype(paths)>(&path_storage);
+                } *paths = reinterpret_cast<decltype(paths)>(std::addressof(path_storage));
 
                 /* Retrieve paths from secure monitor. */
-                AMS_ABORT_UNLESS(spl::smc::AtmosphereGetEmummcConfig(&g_exo_config, paths, 0) == spl::smc::Result::Success);
+                AMS_ABORT_UNLESS(spl::smc::AtmosphereGetEmummcConfig(std::addressof(g_exo_config), paths, 0) == spl::smc::Result::Success);
 
                 const Storage storage = static_cast<Storage>(g_exo_config.base_cfg.type);
                 g_is_emummc = g_exo_config.base_cfg.magic == StorageMagic && storage != Storage_Emmc;
 
                 /* Format paths. */
-                if (storage == Storage_SdFile) {
-                    std::snprintf(g_exo_config.file_cfg.path, sizeof(g_exo_config.file_cfg.path), "/%s", paths->file_path);
-                }
+                {
+                    char tmp_path[MaxDirLen + 1];
 
-                std::snprintf(g_exo_config.emu_dir_path, sizeof(g_exo_config.emu_dir_path), "/%s", paths->nintendo_path);
+                    /* Format paths. */
+                    if (storage == Storage_SdFile) {
+                        util::TSNPrintf(tmp_path, sizeof(tmp_path), "/%s", paths->file_path);
+                        R_ABORT_UNLESS(fs::PathFormatter::Normalize(g_exo_config.file_cfg.path, sizeof(g_exo_config.file_cfg.path), tmp_path, std::strlen(tmp_path) + 1, fs::PathFlags{}));
+                    }
 
-                /* If we're emummc, implement default nintendo redirection path. */
-                if (g_is_emummc && std::strcmp(g_exo_config.emu_dir_path, "/") == 0) {
-                    std::snprintf(g_exo_config.emu_dir_path, sizeof(g_exo_config.emu_dir_path), "/emummc/Nintendo_%04x", g_exo_config.base_cfg.id);
+                    util::TSNPrintf(tmp_path, sizeof(tmp_path), "/%s", paths->nintendo_path);
+                    R_ABORT_UNLESS(fs::PathFormatter::Normalize(g_exo_config.emu_dir_path, sizeof(g_exo_config.emu_dir_path), tmp_path, std::strlen(tmp_path) + 1, fs::PathFlags{}));
+
+                    /* If we're emummc, implement default nintendo redirection path. */
+                    if (g_is_emummc && std::strcmp(g_exo_config.emu_dir_path, "/") == 0) {
+                        util::TSNPrintf(tmp_path, sizeof(tmp_path), "/emummc/Nintendo_%04x", g_exo_config.base_cfg.id);
+                        R_ABORT_UNLESS(fs::PathFormatter::Normalize(g_exo_config.emu_dir_path, sizeof(g_exo_config.emu_dir_path), tmp_path, std::strlen(tmp_path) + 1, fs::PathFlags{}));
+                    }
                 }
             }
 
@@ -108,6 +116,12 @@ namespace ams::emummc {
     bool IsActive() {
         CacheValues();
         return g_is_emummc;
+    }
+
+    /* Get the active emummc id. */
+    u32 GetActiveId() {
+        CacheValues();
+        return g_exo_config.base_cfg.id;
     }
 
     /* Get Nintendo redirection path. */

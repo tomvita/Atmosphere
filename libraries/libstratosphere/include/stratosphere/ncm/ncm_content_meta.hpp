@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -16,6 +16,7 @@
 #pragma once
 #include <stratosphere/ncm/ncm_content_meta_id.hpp>
 #include <stratosphere/ncm/ncm_content_meta_key.hpp>
+#include <stratosphere/ncm/ncm_content_meta_platform.hpp>
 #include <stratosphere/ncm/ncm_content_info.hpp>
 #include <stratosphere/ncm/ncm_content_info_data.hpp>
 #include <stratosphere/ncm/ncm_firmware_variation.hpp>
@@ -27,6 +28,7 @@ namespace ams::ncm {
         ContentMetaAttribute_None                   = (0 << 0),
         ContentMetaAttribute_IncludesExFatDriver    = (1 << 0),
         ContentMetaAttribute_Rebootless             = (1 << 1),
+        ContentMetaAttribute_Compacted              = (1 << 2),
     };
 
     struct ContentMetaInfo {
@@ -57,7 +59,7 @@ namespace ams::ncm {
         u16 content_count;
         u16 content_meta_count;
         u8 attributes;
-        StorageId storage_id;
+        ContentMetaPlatform platform;
     };
 
     static_assert(sizeof(ContentMetaHeader) == 0x8);
@@ -66,7 +68,7 @@ namespace ams::ncm {
         u64 id;
         u32 version;
         ContentMetaType type;
-        u8 reserved_0D;
+        ContentMetaPlatform platform;
         u16 extended_header_size;
         u16 content_count;
         u16 content_meta_count;
@@ -78,8 +80,7 @@ namespace ams::ncm {
         u8 reserved_1C[4];
     };
     static_assert(sizeof(PackagedContentMetaHeader) == 0x20);
-    static_assert(OFFSETOF(PackagedContentMetaHeader, reserved_0D) == 0x0D);
-    static_assert(OFFSETOF(PackagedContentMetaHeader, reserved_1C) == 0x1C);
+    static_assert(AMS_OFFSETOF(PackagedContentMetaHeader, reserved_1C) == 0x1C);
 
     using InstallContentMetaHeader = PackagedContentMetaHeader;
 
@@ -97,6 +98,14 @@ namespace ams::ncm {
     };
 
     struct AddOnContentMetaExtendedHeader {
+        ApplicationId application_id;
+        u32 required_application_version;
+        u8 content_accessibilities;
+        u8 padding[3];
+        DataPatchId data_patch_id;
+    };
+
+    struct LegacyAddOnContentMetaExtendedHeader {
         ApplicationId application_id;
         u32 required_application_version;
         u32 padding;
@@ -118,9 +127,9 @@ namespace ams::ncm {
             using HeaderType = ContentMetaHeaderType;
             using InfoType   = ContentInfoType;
         private:
-            void *data;
-            const size_t size;
-            bool is_header_valid;
+            void *m_data;
+            const size_t m_size;
+            bool m_is_header_valid;
         private:
             static size_t GetExtendedHeaderSize(ContentMetaType type) {
                 switch (type) {
@@ -132,8 +141,8 @@ namespace ams::ncm {
                 }
             }
         protected:
-            constexpr ContentMetaAccessor(const void *d, size_t sz) : data(const_cast<void *>(d)), size(sz), is_header_valid(true) { /* ... */ }
-            constexpr ContentMetaAccessor(void *d, size_t sz) : data(d), size(sz), is_header_valid(false) { /* ... */ }
+            constexpr ContentMetaAccessor(const void *d, size_t sz) : m_data(const_cast<void *>(d)), m_size(sz), m_is_header_valid(true) { /* ... */ }
+            constexpr ContentMetaAccessor(void *d, size_t sz) : m_data(d), m_size(sz), m_is_header_valid(false) { /* ... */ }
 
             template<class NewHeaderType, class NewInfoType>
             static constexpr size_t CalculateSizeImpl(size_t ext_header_size, size_t content_count, size_t content_meta_count, size_t extended_data_size, bool has_digest) {
@@ -145,7 +154,7 @@ namespace ams::ncm {
             }
 
             uintptr_t GetExtendedHeaderAddress() const {
-                return reinterpret_cast<uintptr_t>(this->data) + sizeof(HeaderType);
+                return reinterpret_cast<uintptr_t>(m_data) + sizeof(HeaderType);
             }
 
             uintptr_t GetContentInfoStartAddress() const {
@@ -214,21 +223,21 @@ namespace ams::ncm {
 
         public:
             const void *GetData() const {
-                return this->data;
+                return m_data;
             }
 
             size_t GetSize() const {
-                return this->size;
+                return m_size;
             }
 
             HeaderType *GetWritableHeader() const {
-                AMS_ABORT_UNLESS(this->is_header_valid);
-                return reinterpret_cast<HeaderType *>(this->data);
+                AMS_ABORT_UNLESS(m_is_header_valid);
+                return reinterpret_cast<HeaderType *>(m_data);
             }
 
             const HeaderType *GetHeader() const {
-                AMS_ABORT_UNLESS(this->is_header_valid);
-                return static_cast<const HeaderType *>(this->data);
+                AMS_ABORT_UNLESS(m_is_header_valid);
+                return static_cast<const HeaderType *>(m_data);
             }
 
             ContentMetaKey GetKey() const {
@@ -303,17 +312,17 @@ namespace ams::ncm {
                 return static_cast<StorageId>(this->GetHeader()->storage_id);
             }
 
-            std::optional<ApplicationId> GetApplicationId(const ContentMetaKey &key) const {
+            util::optional<ApplicationId> GetApplicationId(const ContentMetaKey &key) const {
                 switch (key.type) {
                     case ContentMetaType::Application:  return ApplicationId{ key.id };
                     case ContentMetaType::Patch:        return this->GetExtendedHeader<PatchMetaExtendedHeader>()->application_id;
                     case ContentMetaType::AddOnContent: return this->GetExtendedHeader<AddOnContentMetaExtendedHeader>()->application_id;
                     case ContentMetaType::Delta:        return this->GetExtendedHeader<DeltaMetaExtendedHeader>()->application_id;
-                    default:                            return std::nullopt;
+                    default:                            return util::nullopt;
                 }
             }
 
-            std::optional<ApplicationId> GetApplicationId() const {
+            util::optional<ApplicationId> GetApplicationId() const {
                 return this->GetApplicationId(this->GetKey());
             }
     };
@@ -335,6 +344,10 @@ namespace ams::ncm {
             size_t CalculateConvertContentMetaSize() const;
             void ConvertToContentMeta(void *dst, size_t size, const ContentInfo &meta);
 
+            size_t CalculateConvertFragmentOnlyInstallContentMetaSize(s32 fragment_count) const {
+                return CalculateSizeImpl<InstallContentMetaHeader, InstallContentInfo>(this->GetExtendedHeaderSize(), fragment_count + 1, 0, 0, false);
+            }
+
             Result CalculateConvertFragmentOnlyInstallContentMetaSize(size_t *out_size, u32 source_version) const;
             Result ConvertToFragmentOnlyInstallContentMeta(void *dst, size_t size, const InstallContentInfo &content_info, u32 source_version);
 
@@ -342,6 +355,10 @@ namespace ams::ncm {
 
             static constexpr size_t CalculateSize(ContentMetaType type, size_t content_count, size_t content_meta_count, size_t extended_data_size) {
                 return ContentMetaAccessor::CalculateSize(type, content_count, content_meta_count, extended_data_size, true);
+            }
+
+            size_t GetExtendedDataOffset() const {
+                return this->GetExtendedDataAddress() - reinterpret_cast<uintptr_t>(this->GetData());
             }
     };
 
@@ -366,6 +383,17 @@ namespace ams::ncm {
             using ContentMetaAccessor::CalculateContentRequiredSize;
             using ContentMetaAccessor::GetWritableContentInfo;
             using ContentMetaAccessor::SetStorageId;
+    };
+
+    class PatchMetaExtendedDataAccessor;
+    struct PatchDeltaHeader;
+    class AutoBuffer;
+
+    class MetaConverter {
+        public:
+            static Result CountContentExceptForMeta(s32 *out, PatchMetaExtendedDataAccessor *accessor, const PatchDeltaHeader &header, s32 delta_index);
+            static Result FindDeltaIndex(s32 *out, PatchMetaExtendedDataAccessor *accessor, u32 source_version, u32 destination_version);
+            static Result GetFragmentOnlyInstallContentMeta(AutoBuffer *out, const InstallContentInfo &content_info, const PackagedContentMetaReader &reader, PatchMetaExtendedDataAccessor *accessor, u32 source_version);
     };
 
 }

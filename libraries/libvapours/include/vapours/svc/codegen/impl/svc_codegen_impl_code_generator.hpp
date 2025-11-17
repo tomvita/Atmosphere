@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -189,6 +189,11 @@ namespace ams::svc::codegen::impl {
                 __asm__ __volatile__("mov     x%c[dst], x%c[src]" :: [dst]"i"(Dst), [src]"i"(Src) : "memory");
             }
 
+            template<size_t Reg>
+            static ALWAYS_INLINE void ConvertToBoolean() {
+                __asm__ __volatile__("and     x%c[reg], x%c[reg], #1" :: [reg]"i"(Reg) : "memory");
+            }
+
             template<size_t Reg, size_t Offset, size_t Size>
             static ALWAYS_INLINE void LoadFromStack() {
                 if constexpr (Size == 4) {
@@ -196,7 +201,7 @@ namespace ams::svc::codegen::impl {
                 } else if constexpr (Size == 8) {
                     __asm__ __volatile__("ldr     x%c[r], [sp, %c[offset]]" :: [r]"i"(Reg), [offset]"i"(Offset) : "memory");
                 } else {
-                    static_assert(Size != Size);
+                    static_assert(false, "Invalid Size");
                 }
             }
 
@@ -207,7 +212,7 @@ namespace ams::svc::codegen::impl {
                 } else if constexpr (Size == 8) {
                     __asm__ __volatile__("ldp     x%c[r0], x%c[r1], [sp, %c[offset]]" :: [r0]"i"(Reg0), [r1]"i"(Reg1), [offset]"i"(Offset) : "memory");
                 } else {
-                    static_assert(Size != Size);
+                    static_assert(false, "Invalid Size");
                 }
             }
 
@@ -218,7 +223,7 @@ namespace ams::svc::codegen::impl {
                 } else if constexpr (Size == 8) {
                     __asm__ __volatile__("str     x%c[r], [sp, %c[offset]]" :: [r]"i"(Reg), [offset]"i"(Offset) : "memory");
                 } else {
-                    static_assert(Size != Size);
+                    static_assert(false, "Invalid Size");
                 }
             }
 
@@ -229,7 +234,7 @@ namespace ams::svc::codegen::impl {
                 } else if constexpr (Size == 8) {
                     __asm__ __volatile__("stp     x%c[r0], x%c[r1], [sp, %c[offset]]" :: [r0]"i"(Reg0), [r1]"i"(Reg1), [offset]"i"(Offset) : "memory");
                 } else {
-                    static_assert(Size != Size);
+                    static_assert(false, "Invalid Size");
                 }
             }
 

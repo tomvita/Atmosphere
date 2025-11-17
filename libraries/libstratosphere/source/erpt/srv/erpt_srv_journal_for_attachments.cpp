@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,9 +19,9 @@
 
 namespace ams::erpt::srv {
 
-    util::IntrusiveListBaseTraits<JournalRecord<AttachmentInfo>>::ListType JournalForAttachments::s_attachment_list;
-    u32 JournalForAttachments::s_attachment_count = 0;
-    u32 JournalForAttachments::s_used_storage = 0;
+    constinit util::IntrusiveListBaseTraits<JournalRecord<AttachmentInfo>>::ListType JournalForAttachments::s_attachment_list;
+    constinit u32 JournalForAttachments::s_attachment_count = 0;
+    constinit u32 JournalForAttachments::s_used_storage = 0;
 
     namespace {
 
@@ -34,7 +34,9 @@ namespace ams::erpt::srv {
             auto *record = std::addressof(*it);
             it = s_attachment_list.erase(s_attachment_list.iterator_to(*record));
             if (record->RemoveReference()) {
-                Stream::DeleteStream(Attachment::FileName(record->info.attachment_id).name);
+                if (R_FAILED(Stream::DeleteStream(Attachment::FileName(record->m_info.attachment_id).name))) {
+                    /* TODO: Log failure? */
+                }
                 delete record;
             }
         }
@@ -48,25 +50,27 @@ namespace ams::erpt::srv {
     Result JournalForAttachments::CommitJournal(Stream *stream) {
         R_TRY(stream->WriteStream(reinterpret_cast<const u8 *>(std::addressof(s_attachment_count)), sizeof(s_attachment_count)));
         for (auto it = s_attachment_list.crbegin(); it != s_attachment_list.crend(); it++) {
-            R_TRY(stream->WriteStream(reinterpret_cast<const u8 *>(std::addressof(it->info)), sizeof(it->info)));
+            R_TRY(stream->WriteStream(reinterpret_cast<const u8 *>(std::addressof(it->m_info)), sizeof(it->m_info)));
         }
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result JournalForAttachments::DeleteAttachments(ReportId report_id) {
         for (auto it = s_attachment_list.begin(); it != s_attachment_list.end(); /* ... */) {
             auto *record = std::addressof(*it);
-            if (record->info.owner_report_id == report_id) {
+            if (record->m_info.owner_report_id == report_id) {
                 /* Erase from the list. */
                 it = s_attachment_list.erase(s_attachment_list.iterator_to(*record));
 
                 /* Update storage tracking counts. */
                 --s_attachment_count;
-                s_used_storage -= static_cast<u32>(record->info.attachment_size);
+                s_used_storage -= static_cast<u32>(record->m_info.attachment_size);
 
                 /* Delete the object, if we should. */
                 if (record->RemoveReference()) {
-                    Stream::DeleteStream(Attachment::FileName(record->info.attachment_id).name);
+                    const auto delete_res = Stream::DeleteStream(Attachment::FileName(record->m_info.attachment_id).name);
+                    R_ASSERT(delete_res);
+                    AMS_UNUSED(delete_res);
                     delete record;
                 }
             } else {
@@ -74,18 +78,23 @@ namespace ams::erpt::srv {
                 it++;
             }
         }
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
-    Result JournalForAttachments::GetAttachmentList(AttachmentList *out, ReportId report_id) {
+    Result JournalForAttachments::GetAttachmentList(u32 *out_count, AttachmentInfo *out_infos, size_t max_out_infos, ReportId report_id) {
+        if (hos::GetVersion() >= hos::Version_20_0_0) {
+            /* TODO: What define gives a minimum of 10? */
+            R_UNLESS(max_out_infos >= 10, erpt::ResultInvalidArgument());
+        }
+
         u32 count = 0;
-        for (auto it = s_attachment_list.cbegin(); it != s_attachment_list.cend() && count < util::size(out->attachments); it++) {
-            if (report_id == it->info.owner_report_id) {
-                out->attachments[count++] = it->info;
+        for (auto it = s_attachment_list.cbegin(); it != s_attachment_list.cend() && count < max_out_infos; it++) {
+            if (report_id == it->m_info.owner_report_id) {
+                out_infos[count++] = it->m_info;
             }
         }
-        out->attachment_count = count;
-        return ResultSuccess();
+        *out_count = count;
+        R_SUCCEED();
     }
 
     u32 JournalForAttachments::GetUsedStorage() {
@@ -118,27 +127,30 @@ namespace ams::erpt::srv {
 
             auto record_guard = SCOPE_GUARD { delete record; };
 
-            if (R_FAILED(Stream::GetStreamSize(std::addressof(record->info.attachment_size), Attachment::FileName(record->info.attachment_id).name))) {
+            if (R_FAILED(Stream::GetStreamSize(std::addressof(record->m_info.attachment_size), Attachment::FileName(record->m_info.attachment_id).name))) {
                 continue;
             }
 
-            if (record->info.flags.Test<AttachmentFlag::HasOwner>() && JournalForReports::RetrieveRecord(record->info.owner_report_id) != nullptr) {
-                /* NOTE: Nintendo does not check the result of storing the new record... */
+            if (record->m_info.flags.Test<AttachmentFlag::HasOwner>() && JournalForReports::RetrieveRecord(record->m_info.owner_report_id) != nullptr) {
                 record_guard.Cancel();
-                StoreRecord(record);
+                R_TRY(StoreRecord(record));
             } else {
                 /* If the attachment has no owner (or we deleted the report), delete the file associated with it. */
-                Stream::DeleteStream(Attachment::FileName(record->info.attachment_id).name);
+                const auto delete_res = Stream::DeleteStream(Attachment::FileName(record->m_info.attachment_id).name);
+                R_ASSERT(delete_res);
+                AMS_UNUSED(delete_res);
             }
         }
 
         cleanup_guard.Cancel();
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     JournalRecord<AttachmentInfo> *JournalForAttachments::RetrieveRecord(AttachmentId attachment_id) {
         for (auto it = s_attachment_list.begin(); it != s_attachment_list.end(); it++) {
-            return std::addressof(*it);
+            if (auto *record = std::addressof(*it); record->m_info.attachment_id == attachment_id) {
+                return record;
+            }
         }
         return nullptr;
     }
@@ -146,21 +158,21 @@ namespace ams::erpt::srv {
     Result JournalForAttachments::SetOwner(AttachmentId attachment_id, ReportId report_id) {
         for (auto it = s_attachment_list.begin(); it != s_attachment_list.end(); it++) {
             auto *record = std::addressof(*it);
-            if (record->info.attachment_id == attachment_id) {
-                R_UNLESS(!record->info.flags.Test<AttachmentFlag::HasOwner>(), erpt::ResultAlreadyOwned());
+            if (record->m_info.attachment_id == attachment_id) {
+                R_UNLESS(!record->m_info.flags.Test<AttachmentFlag::HasOwner>(), erpt::ResultAlreadyOwned());
 
-                record->info.owner_report_id = report_id;
-                record->info.flags.Set<AttachmentFlag::HasOwner>();
-                return ResultSuccess();
+                record->m_info.owner_report_id = report_id;
+                record->m_info.flags.Set<AttachmentFlag::HasOwner>();
+                R_SUCCEED();
             }
         }
-        return erpt::ResultInvalidArgument();
+        R_THROW(erpt::ResultInvalidArgument());
     }
 
     Result JournalForAttachments::StoreRecord(JournalRecord<AttachmentInfo> *record) {
         /* Check if the record already exists. */
         for (auto it = s_attachment_list.begin(); it != s_attachment_list.end(); it++) {
-            R_UNLESS(it->info.attachment_id != record->info.attachment_id, erpt::ResultAlreadyExists());
+            R_UNLESS(it->m_info.attachment_id != record->m_info.attachment_id, erpt::ResultAlreadyExists());
         }
 
         /* Add a reference to the new record. */
@@ -169,9 +181,9 @@ namespace ams::erpt::srv {
         /* Push the record into the list. */
         s_attachment_list.push_front(*record);
         s_attachment_count++;
-        s_used_storage += static_cast<u32>(record->info.attachment_size);
+        s_used_storage += static_cast<u32>(record->m_info.attachment_size);
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result JournalForAttachments::SubmitAttachment(AttachmentId *out, char *name, const u8 *data, u32 data_size) {
@@ -213,7 +225,9 @@ namespace ams::erpt::srv {
             R_TRY(StoreRecord(record));
         }
 
-        return ResultSuccess();
+        *out = info.attachment_id;
+
+        R_SUCCEED();
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -21,8 +21,8 @@
 namespace ams::fs {
 
     /* Common utilities. */
-    Result EnsureDirectoryRecursively(const char *path);
-    Result EnsureParentDirectoryRecursively(const char *path);
+    Result EnsureDirectory(const char *path);
+    Result EnsureParentDirectory(const char *path);
 
     Result HasFile(bool *out, const char *path);
     Result HasDirectory(bool *out, const char *path);

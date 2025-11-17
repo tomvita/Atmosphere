@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -20,7 +20,7 @@
 namespace ams::os::impl {
 
     #if defined(ATMOSPHERE_OS_HORIZON)
-        class ReadWriteLockHorizonImpl;
+        class ReaderWriterLockHorizonImpl;
     #endif
 
     class InternalConditionVariableImpl;
@@ -28,17 +28,17 @@ namespace ams::os::impl {
     class InternalCriticalSectionImpl {
         private:
             #if defined(ATMOSPHERE_OS_HORIZON)
-                friend class ReadWriteLockHorizonImpl;
+                friend class ReaderWriterLockHorizonImpl;
             #endif
 
             friend class InternalConditionVariableImpl;
         private:
-            u32 thread_handle;
+            u32 m_thread_handle;
         public:
-            constexpr InternalCriticalSectionImpl() : thread_handle(svc::InvalidHandle) { /* ... */ }
+            constexpr InternalCriticalSectionImpl() : m_thread_handle(svc::InvalidHandle) { /* ... */ }
 
-            constexpr void Initialize() { this->thread_handle = svc::InvalidHandle; }
-            constexpr void Finalize() { /* ... */}
+            constexpr void Initialize() { m_thread_handle = svc::InvalidHandle; }
+            constexpr void Finalize() { /* ... */ }
 
             void Enter();
             bool TryEnter();
@@ -54,5 +54,11 @@ namespace ams::os::impl {
             ALWAYS_INLINE bool try_lock() { return this->TryLock(); }
             ALWAYS_INLINE void unlock()   { return this->Unlock(); }
     };
+
+    using InternalCriticalSectionStorageTypeForConstantInitialize = u32;
+
+    #define AMS_OS_INTERNAL_CRITICAL_SECTION_IMPL_CONSTANT_INITIALIZER {0}
+
+    #define AMS_OS_INTERNAL_CRITICAL_SECTION_IMPL_CAN_CHECK_LOCKED_BY_CURRENT_THREAD
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -14,13 +14,20 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #pragma once
-#include "fs_common.hpp"
+#include <stratosphere/fs/fs_common.hpp>
 
 namespace ams::fs {
 
+    /* ACCURATE_TO_VERSION: Unknown */
     constexpr inline size_t EntryNameLengthMax = 0x300;
 
-    using DirectoryEntry = ::FsDirectoryEntry;
+    struct DirectoryEntry {
+        char name[EntryNameLengthMax + 1];
+        char pad[3];
+        s8 type;
+        u8 pad2[3];
+        s64 file_size;
+    };
 
     struct DirectoryHandle {
         void *handle;

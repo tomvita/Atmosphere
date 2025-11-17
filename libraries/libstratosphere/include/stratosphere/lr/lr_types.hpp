@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -57,5 +57,9 @@ namespace ams::lr {
     };
 
     static_assert(util::is_pod<Path>::value && sizeof(Path) == fs::EntryNameLengthMax);
+
+    struct PathByMapAlias : public Path, ams::sf::PrefersMapAliasTransferMode{};
+    static_assert(util::is_pod<PathByMapAlias>::value);
+    static_assert(sizeof(PathByMapAlias) == sizeof(Path));
 
 }

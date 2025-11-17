@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,6 +18,7 @@
 namespace ams::ncm {
 
     namespace {
+
         constexpr inline s64 EncryptionMetadataSize   = 16_KB;
         constexpr inline s64 ConcatenationFileSizeMax = 4_GB;
 
@@ -61,7 +62,7 @@ namespace ams::ncm {
                 offset += count;
             }
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
     }
@@ -79,11 +80,11 @@ namespace ams::ncm {
         R_TRY(ForEachContentInfo(key, db, [&size](bool *out_done, const ContentInfo &info) -> Result {
             size += CalculateRequiredSize(info.GetSize(), MaxClusterSize);
             *out_done = false;
-            return ResultSuccess();
+            R_SUCCEED();
         }));
 
         *out_size = size;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
 }

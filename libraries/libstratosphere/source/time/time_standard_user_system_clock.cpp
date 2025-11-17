@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,8 +18,13 @@
 namespace ams::time {
 
     Result StandardUserSystemClock::GetCurrentTime(PosixTime *out) {
+        #if defined(ATMOSPHERE_OS_HORIZON)
         static_assert(sizeof(*out) == sizeof(u64));
-        return ::timeGetCurrentTime(::TimeType_UserSystemClock, reinterpret_cast<u64 *>(out));
+        R_RETURN(::timeGetCurrentTime(::TimeType_UserSystemClock, reinterpret_cast<u64 *>(out)));
+        #else
+        AMS_UNUSED(out);
+        AMS_ABORT("TODO");
+        #endif
     }
 
     StandardUserSystemClock::time_point StandardUserSystemClock::now() {

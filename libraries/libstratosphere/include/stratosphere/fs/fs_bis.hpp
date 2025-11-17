@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,6 +18,8 @@
 #include <stratosphere/fs/fs_istorage.hpp>
 
 namespace ams::fs {
+
+    /* ACCURATE_TO_VERSION: Unknown */
 
    enum class BisPartitionId {
        /* Boot0 */
@@ -42,6 +44,8 @@ namespace ams::fs {
        SystemProperEncryption           = 32,
        SystemProperPartition            = 33,
        SignedSystemPartitionOnSafeMode  = 34,
+       DeviceTreeBlob                   = 35,
+       System0                          = 36,
    };
 
    const char *GetBisMountName(BisPartitionId id);

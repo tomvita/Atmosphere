@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,85 +15,65 @@
  */
 #include <stratosphere.hpp>
 #include "ro_nro_utils.hpp"
+#include "ro_random.hpp"
 
 namespace ams::ro::impl {
 
     namespace {
 
-        constexpr size_t MaxMapRetries = 0x200;
+        ALWAYS_INLINE size_t SetupNroProcessMemoryRegions(os::ProcessMemoryRegion *regions, u64 nro_heap_address, u64 nro_heap_size, u64 bss_heap_address, u64 bss_heap_size) {
+            /* Reset region count. */
+            size_t num_regions = 0;
 
-    }
+            /* We always want a region for the nro. */
+            regions[num_regions++] = { nro_heap_address, nro_heap_size };
 
-    Result MapNro(u64 *out_base_address, Handle process_handle, u64 nro_heap_address, u64 nro_heap_size, u64 bss_heap_address, u64 bss_heap_size) {
-        map::MappedCodeMemory nro_mcm(ResultInternalError{});
-        map::MappedCodeMemory bss_mcm(ResultInternalError{});
-        u64 base_address;
-
-        /* Map the NRO, and map the BSS immediately after it. */
-        size_t i;
-        for (i = 0; i < MaxMapRetries; i++) {
-            map::MappedCodeMemory tmp_nro_mcm(ResultInternalError{});
-            R_TRY(map::MapCodeMemoryInProcess(tmp_nro_mcm, process_handle, nro_heap_address, nro_heap_size));
-            base_address = tmp_nro_mcm.GetDstAddress();
-
+            /* If we have bss, create a region for bss. */
             if (bss_heap_size > 0) {
-                map::MappedCodeMemory tmp_bss_mcm(process_handle, base_address + nro_heap_size, bss_heap_address, bss_heap_size);
-                R_TRY_CATCH(tmp_bss_mcm.GetResult()) {
-                    R_CATCH(svc::ResultInvalidCurrentMemory) {
-                        continue;
-                    }
-                } R_END_TRY_CATCH;
-
-                if (!map::CanAddGuardRegionsInProcess(process_handle, base_address, nro_heap_size + bss_heap_size)) {
-                    continue;
-                }
-
-                bss_mcm = std::move(tmp_bss_mcm);
-            } else {
-                if (!map::CanAddGuardRegionsInProcess(process_handle, base_address, nro_heap_size)) {
-                    continue;
-                }
+                regions[num_regions++] = { bss_heap_address, bss_heap_size };
             }
-            nro_mcm = std::move(tmp_nro_mcm);
-            break;
+
+            return num_regions;
         }
-        R_UNLESS(i < MaxMapRetries, ResultOutOfAddressSpace());
 
-        /* Invalidation here actually prevents them from unmapping at scope exit. */
-        nro_mcm.Invalidate();
-        bss_mcm.Invalidate();
-
-        *out_base_address = base_address;
-        return ResultSuccess();
     }
 
-    Result SetNroPerms(Handle process_handle, u64 base_address, u64 rx_size, u64 ro_size, u64 rw_size) {
-        const u64 rx_offset = 0;
-        const u64 ro_offset = rx_offset + rx_size;
+    Result MapNro(u64 *out_base_address, os::NativeHandle process_handle, u64 nro_heap_address, u64 nro_heap_size, u64 bss_heap_address, u64 bss_heap_size) {
+        /* Set up the process memory regions. */
+        os::ProcessMemoryRegion regions[2];
+        const size_t num_regions = SetupNroProcessMemoryRegions(regions, nro_heap_address, nro_heap_size, bss_heap_address, bss_heap_size);
+
+        /* Re-map the nro/bss as code memory in the destination process. */
+        R_TRY_CATCH(os::MapProcessCodeMemory(out_base_address, process_handle, regions, num_regions, ro::impl::GenerateSecureRandom)) {
+            R_CONVERT(os::ResultOutOfAddressSpace, ro::ResultOutOfAddressSpace())
+        } R_END_TRY_CATCH;
+
+        R_SUCCEED();
+    }
+
+    Result SetNroPerms(os::NativeHandle process_handle, u64 base_address, u64 rx_size, u64 ro_size, u64 rw_size, bool is_aligned_header) {
+        const u64 rx_offset = is_aligned_header ? os::MemoryPageSize : 0;
+        const u64 ro_offset = rx_size;
         const u64 rw_offset = ro_offset + ro_size;
 
-        R_TRY(svcSetProcessMemoryPermission(process_handle, base_address + rx_offset, rx_size, Perm_Rx));
-        R_TRY(svcSetProcessMemoryPermission(process_handle, base_address + ro_offset, ro_size, Perm_R ));
-        R_TRY(svcSetProcessMemoryPermission(process_handle, base_address + rw_offset, rw_size, Perm_Rw));
+        if (is_aligned_header) {
+            R_TRY(os::SetProcessMemoryPermission(process_handle, base_address, os::MemoryPageSize, os::MemoryPermission_ReadOnly));
+        }
 
-        return ResultSuccess();
+        R_TRY(os::SetProcessMemoryPermission(process_handle, base_address + rx_offset, rx_size - rx_offset, os::MemoryPermission_ReadExecute));
+        R_TRY(os::SetProcessMemoryPermission(process_handle, base_address + ro_offset, ro_size, os::MemoryPermission_ReadOnly));
+        R_TRY(os::SetProcessMemoryPermission(process_handle, base_address + rw_offset, rw_size, os::MemoryPermission_ReadWrite));
+
+        R_SUCCEED();
     }
 
-    Result UnmapNro(Handle process_handle, u64 base_address, u64 nro_heap_address, u64 bss_heap_address, u64 bss_heap_size, u64 code_size, u64 rw_size) {
-        /* First, unmap bss. */
-        if (bss_heap_size > 0) {
-            R_TRY(svcUnmapProcessCodeMemory(process_handle, base_address + code_size + rw_size, bss_heap_address, bss_heap_size));
-        }
+    Result UnmapNro(os::NativeHandle process_handle, u64 base_address, u64 nro_heap_address, u64 nro_heap_size, u64 bss_heap_address, u64 bss_heap_size) {
+        /* Set up the process memory regions. */
+        os::ProcessMemoryRegion regions[2];
+        const size_t num_regions = SetupNroProcessMemoryRegions(regions, nro_heap_address, nro_heap_size, bss_heap_address, bss_heap_size);
 
-        /* Next, unmap .rwdata */
-        if (rw_size > 0) {
-            R_TRY(svcUnmapProcessCodeMemory(process_handle, base_address + code_size, nro_heap_address + code_size, rw_size));
-        }
-
-        /* Finally, unmap .text + .rodata. */
-        R_TRY(svcUnmapProcessCodeMemory(process_handle, base_address, nro_heap_address, code_size));
-
-        return ResultSuccess();
+        /* Unmap the nro/bss. */
+        R_RETURN(os::UnmapProcessCodeMemory(process_handle, base_address, regions, num_regions));
     }
 
 }

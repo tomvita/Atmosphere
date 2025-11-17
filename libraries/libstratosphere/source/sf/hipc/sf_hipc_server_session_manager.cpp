@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,6 +19,7 @@ namespace ams::sf::hipc {
 
     namespace {
 
+        #if AMS_SF_MITM_SUPPORTED
         constexpr inline void PreProcessCommandBufferForMitm(const cmif::ServiceDispatchContext &ctx, const cmif::PointerAndSize &pointer_buffer, uintptr_t cmd_buffer) {
             /* TODO: Less gross method of editing command buffer? */
             if (ctx.request.meta.send_pid) {
@@ -36,27 +37,34 @@ namespace ams::sf::hipc {
                 *reinterpret_cast<HipcRecvListEntry *>(cmd_buffer + old_recv_list_offset) = hipcMakeRecvStatic(pointer_buffer.GetPointer(), pointer_buffer.GetSize());
             }
         }
+        #endif
 
     }
 
+    #if AMS_SF_MITM_SUPPORTED
     Result ServerSession::ForwardRequest(const cmif::ServiceDispatchContext &ctx) const {
+        AMS_ABORT_UNLESS(ServerManagerBase::CanAnyManageMitmServers());
         AMS_ABORT_UNLESS(this->IsMitmSession());
+
         /* TODO: Support non-TLS messages? */
-        AMS_ABORT_UNLESS(this->saved_message.GetPointer() != nullptr);
-        AMS_ABORT_UNLESS(this->saved_message.GetSize() == TlsMessageBufferSize);
+        AMS_ABORT_UNLESS(m_saved_message.GetPointer() != nullptr);
+        AMS_ABORT_UNLESS(m_saved_message.GetSize() == TlsMessageBufferSize);
+
+        /* Get TLS message buffer. */
+        u32 * const message_buffer = static_cast<u32 *>(hipc::GetMessageBufferOnTls());
 
         /* Copy saved TLS in. */
-        std::memcpy(armGetTls(), this->saved_message.GetPointer(), this->saved_message.GetSize());
+        std::memcpy(message_buffer, m_saved_message.GetPointer(), m_saved_message.GetSize());
 
         /* Prepare buffer. */
-        PreProcessCommandBufferForMitm(ctx, this->pointer_buffer, reinterpret_cast<uintptr_t>(armGetTls()));
+        PreProcessCommandBufferForMitm(ctx, m_pointer_buffer, reinterpret_cast<uintptr_t>(message_buffer));
 
         /* Dispatch forwards. */
-        R_TRY(svcSendSyncRequest(this->forward_service->session));
+        R_TRY(svc::SendSyncRequest(util::GetReference(m_forward_service)->session));
 
         /* Parse, to ensure we catch any copy handles and close them. */
         {
-            const auto response = hipcParseResponse(armGetTls());
+            const auto response = hipcParseResponse(message_buffer);
             if (response.num_copy_handles) {
                 ctx.handles_to_close->num_handles = response.num_copy_handles;
                 for (size_t i = 0; i < response.num_copy_handles; i++) {
@@ -65,106 +73,122 @@ namespace ams::sf::hipc {
             }
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
+    #endif
 
     void ServerSessionManager::DestroySession(ServerSession *session) {
         /* Destroy object. */
-        session->~ServerSession();
+        std::destroy_at(session);
+
         /* Free object memory. */
         this->FreeSession(session);
     }
 
     void ServerSessionManager::CloseSessionImpl(ServerSession *session) {
-        const Handle session_handle = session->session_handle;
-        os::FinalizeWaitableHolder(session);
+        const auto session_handle = session->m_session_handle;
+        os::FinalizeMultiWaitHolder(session);
         this->DestroySession(session);
-        R_ABORT_UNLESS(svcCloseHandle(session_handle));
+        os::CloseNativeHandle(session_handle);
     }
 
-    Result ServerSessionManager::RegisterSessionImpl(ServerSession *session_memory, Handle session_handle, cmif::ServiceObjectHolder &&obj) {
+    Result ServerSessionManager::RegisterSessionImpl(ServerSession *session_memory, os::NativeHandle session_handle, cmif::ServiceObjectHolder &&obj) {
         /* Create session object. */
-        new (session_memory) ServerSession(session_handle, std::forward<cmif::ServiceObjectHolder>(obj));
+        std::construct_at(session_memory, session_handle, std::forward<cmif::ServiceObjectHolder>(obj));
+
         /* Assign session resources. */
-        session_memory->pointer_buffer = this->GetSessionPointerBuffer(session_memory);
-        session_memory->saved_message  = this->GetSessionSavedMessageBuffer(session_memory);
+        session_memory->m_pointer_buffer = this->GetSessionPointerBuffer(session_memory);
+        session_memory->m_saved_message  = this->GetSessionSavedMessageBuffer(session_memory);
+
         /* Register to wait list. */
-        this->RegisterSessionToWaitList(session_memory);
-        return ResultSuccess();
+        this->RegisterServerSessionToWait(session_memory);
+        R_SUCCEED();
     }
 
-    Result ServerSessionManager::AcceptSessionImpl(ServerSession *session_memory, Handle port_handle, cmif::ServiceObjectHolder &&obj) {
+    Result ServerSessionManager::AcceptSessionImpl(ServerSession *session_memory, os::NativeHandle port_handle, cmif::ServiceObjectHolder &&obj) {
         /* Create session handle. */
-        Handle session_handle;
-        R_TRY(svcAcceptSession(&session_handle, port_handle));
-        bool succeeded = false;
-        ON_SCOPE_EXIT {
-            if (!succeeded) {
-                R_ABORT_UNLESS(svcCloseHandle(session_handle));
-            }
-        };
+        os::NativeHandle session_handle;
+        #if defined(ATMOSPHERE_OS_HORIZON)
+        R_TRY(svc::AcceptSession(std::addressof(session_handle), port_handle));
+        #else
+        AMS_UNUSED(port_handle);
+        AMS_ABORT("TODO");
+        #endif
+
+        auto session_guard = SCOPE_GUARD { os::CloseNativeHandle(session_handle); };
+
         /* Register session. */
         R_TRY(this->RegisterSessionImpl(session_memory, session_handle, std::forward<cmif::ServiceObjectHolder>(obj)));
-        succeeded = true;
-        return ResultSuccess();
+
+        session_guard.Cancel();
+        R_SUCCEED();
     }
 
-    Result ServerSessionManager::RegisterMitmSessionImpl(ServerSession *session_memory, Handle mitm_session_handle, cmif::ServiceObjectHolder &&obj, std::shared_ptr<::Service> &&fsrv) {
+    #if AMS_SF_MITM_SUPPORTED
+    Result ServerSessionManager::RegisterMitmSessionImpl(ServerSession *session_memory, os::NativeHandle mitm_session_handle, cmif::ServiceObjectHolder &&obj, std::shared_ptr<::Service> &&fsrv) {
+        AMS_ABORT_UNLESS(ServerManagerBase::CanAnyManageMitmServers());
+
         /* Create session object. */
-        new (session_memory) ServerSession(mitm_session_handle, std::forward<cmif::ServiceObjectHolder>(obj), std::forward<std::shared_ptr<::Service>>(fsrv));
+        std::construct_at(session_memory, mitm_session_handle, std::forward<cmif::ServiceObjectHolder>(obj), std::forward<std::shared_ptr<::Service>>(fsrv));
+
         /* Assign session resources. */
-        session_memory->pointer_buffer = this->GetSessionPointerBuffer(session_memory);
-        session_memory->saved_message  = this->GetSessionSavedMessageBuffer(session_memory);
+        session_memory->m_pointer_buffer = this->GetSessionPointerBuffer(session_memory);
+        session_memory->m_saved_message  = this->GetSessionSavedMessageBuffer(session_memory);
+
         /* Validate session pointer buffer. */
-        AMS_ABORT_UNLESS(session_memory->pointer_buffer.GetSize() >= session_memory->forward_service->pointer_buffer_size);
-        session_memory->pointer_buffer = cmif::PointerAndSize(session_memory->pointer_buffer.GetAddress(), session_memory->forward_service->pointer_buffer_size);
+        AMS_ABORT_UNLESS(session_memory->m_pointer_buffer.GetSize() >= util::GetReference(session_memory->m_forward_service)->pointer_buffer_size);
+        session_memory->m_pointer_buffer = cmif::PointerAndSize(session_memory->m_pointer_buffer.GetAddress(), util::GetReference(session_memory->m_forward_service)->pointer_buffer_size);
+
         /* Register to wait list. */
-        this->RegisterSessionToWaitList(session_memory);
-        return ResultSuccess();
+        this->RegisterServerSessionToWait(session_memory);
+        R_SUCCEED();
     }
 
-    Result ServerSessionManager::AcceptMitmSessionImpl(ServerSession *session_memory, Handle mitm_port_handle, cmif::ServiceObjectHolder &&obj, std::shared_ptr<::Service> &&fsrv) {
+    Result ServerSessionManager::AcceptMitmSessionImpl(ServerSession *session_memory, os::NativeHandle mitm_port_handle, cmif::ServiceObjectHolder &&obj, std::shared_ptr<::Service> &&fsrv) {
+        AMS_ABORT_UNLESS(ServerManagerBase::CanAnyManageMitmServers());
+
         /* Create session handle. */
-        Handle mitm_session_handle;
-        R_TRY(svcAcceptSession(&mitm_session_handle, mitm_port_handle));
-        bool succeeded = false;
-        ON_SCOPE_EXIT {
-            if (!succeeded) {
-                R_ABORT_UNLESS(svcCloseHandle(mitm_session_handle));
-            }
-        };
+        os::NativeHandle mitm_session_handle;
+        R_TRY(svc::AcceptSession(std::addressof(mitm_session_handle), mitm_port_handle));
+
+        auto session_guard = SCOPE_GUARD { os::CloseNativeHandle(mitm_session_handle); };
+
         /* Register session. */
         R_TRY(this->RegisterMitmSessionImpl(session_memory, mitm_session_handle, std::forward<cmif::ServiceObjectHolder>(obj), std::forward<std::shared_ptr<::Service>>(fsrv)));
-        succeeded = true;
-        return ResultSuccess();
-    }
 
-    Result ServerSessionManager::RegisterSession(Handle session_handle, cmif::ServiceObjectHolder &&obj) {
+        session_guard.Cancel();
+        R_SUCCEED();
+    }
+    #endif
+
+    Result ServerSessionManager::RegisterSession(os::NativeHandle session_handle, cmif::ServiceObjectHolder &&obj) {
         /* We don't actually care about what happens to the session. It'll get linked. */
         ServerSession *session_ptr = nullptr;
-        return this->RegisterSession(&session_ptr, session_handle, std::forward<cmif::ServiceObjectHolder>(obj));
+        R_RETURN(this->RegisterSession(std::addressof(session_ptr), session_handle, std::forward<cmif::ServiceObjectHolder>(obj)));
     }
 
-    Result ServerSessionManager::AcceptSession(Handle port_handle, cmif::ServiceObjectHolder &&obj) {
+    Result ServerSessionManager::AcceptSession(os::NativeHandle port_handle, cmif::ServiceObjectHolder &&obj) {
         /* We don't actually care about what happens to the session. It'll get linked. */
         ServerSession *session_ptr = nullptr;
-        return this->AcceptSession(&session_ptr, port_handle, std::forward<cmif::ServiceObjectHolder>(obj));
+        R_RETURN(this->AcceptSession(std::addressof(session_ptr), port_handle, std::forward<cmif::ServiceObjectHolder>(obj)));
     }
 
-    Result ServerSessionManager::RegisterMitmSession(Handle mitm_session_handle, cmif::ServiceObjectHolder &&obj, std::shared_ptr<::Service> &&fsrv) {
+    #if AMS_SF_MITM_SUPPORTED
+    Result ServerSessionManager::RegisterMitmSession(os::NativeHandle mitm_session_handle, cmif::ServiceObjectHolder &&obj, std::shared_ptr<::Service> &&fsrv) {
         /* We don't actually care about what happens to the session. It'll get linked. */
         ServerSession *session_ptr = nullptr;
-        return this->RegisterMitmSession(&session_ptr, mitm_session_handle, std::forward<cmif::ServiceObjectHolder>(obj), std::forward<std::shared_ptr<::Service>>(fsrv));
+        R_RETURN(this->RegisterMitmSession(std::addressof(session_ptr), mitm_session_handle, std::forward<cmif::ServiceObjectHolder>(obj), std::forward<std::shared_ptr<::Service>>(fsrv)));
     }
 
-    Result ServerSessionManager::AcceptMitmSession(Handle mitm_port_handle, cmif::ServiceObjectHolder &&obj, std::shared_ptr<::Service> &&fsrv) {
+    Result ServerSessionManager::AcceptMitmSession(os::NativeHandle mitm_port_handle, cmif::ServiceObjectHolder &&obj, std::shared_ptr<::Service> &&fsrv) {
         /* We don't actually care about what happens to the session. It'll get linked. */
         ServerSession *session_ptr = nullptr;
-        return this->AcceptMitmSession(&session_ptr, mitm_port_handle, std::forward<cmif::ServiceObjectHolder>(obj), std::forward<std::shared_ptr<::Service>>(fsrv));
+        R_RETURN(this->AcceptMitmSession(std::addressof(session_ptr), mitm_port_handle, std::forward<cmif::ServiceObjectHolder>(obj), std::forward<std::shared_ptr<::Service>>(fsrv)));
     }
+    #endif
 
     Result ServerSessionManager::ReceiveRequestImpl(ServerSession *session, const cmif::PointerAndSize &message) {
-        const cmif::PointerAndSize &pointer_buffer = session->pointer_buffer;
+        const cmif::PointerAndSize &pointer_buffer = session->m_pointer_buffer;
 
         /* If the receive list is odd, we may need to receive repeatedly. */
         while (true) {
@@ -179,14 +203,14 @@ namespace ams::sf::hipc {
                 );
             }
             hipc::ReceiveResult recv_result;
-            R_TRY(hipc::Receive(&recv_result, session->session_handle, message));
+            R_TRY(hipc::Receive(std::addressof(recv_result), session->m_session_handle, message));
             switch (recv_result) {
                 case hipc::ReceiveResult::Success:
-                    session->is_closed = false;
-                    return ResultSuccess();
+                    session->m_is_closed = false;
+                    R_SUCCEED();
                 case hipc::ReceiveResult::Closed:
-                    session->is_closed = true;
-                    return ResultSuccess();
+                    session->m_is_closed = true;
+                    R_SUCCEED();
                 case hipc::ReceiveResult::NeedsRetry:
                     continue;
                 AMS_UNREACHABLE_DEFAULT_CASE();
@@ -196,42 +220,40 @@ namespace ams::sf::hipc {
 
     namespace {
 
-        NX_CONSTEXPR u32 GetCmifCommandType(const cmif::PointerAndSize &message) {
+        ALWAYS_INLINE u32 GetCmifCommandType(const cmif::PointerAndSize &message) {
             HipcHeader hdr = {};
-            __builtin_memcpy(&hdr, message.GetPointer(), sizeof(hdr));
+            __builtin_memcpy(std::addressof(hdr), message.GetPointer(), sizeof(hdr));
             return hdr.type;
         }
 
     }
 
     Result ServerSessionManager::ProcessRequest(ServerSession *session, const cmif::PointerAndSize &message) {
-        if (session->is_closed) {
+        if (session->m_is_closed) {
             this->CloseSessionImpl(session);
-            return ResultSuccess();
+            R_SUCCEED();
         }
+
         switch (GetCmifCommandType(message)) {
             case CmifCommandType_Close:
             {
                 this->CloseSessionImpl(session);
-                return ResultSuccess();
+                R_SUCCEED();
             }
             default:
             {
                 R_TRY_CATCH(this->ProcessRequestImpl(session, message, message)) {
-                    R_CATCH(sf::impl::ResultRequestContextChanged) {
-                        /* A meta message changing the request context has been sent. */
-                        return R_CURRENT_RESULT;
-                    }
+                    R_CATCH_RETHROW(sf::impl::ResultRequestContextChanged) /* A meta message changing the request context has been sent. */
                     R_CATCH_ALL() {
                         /* All other results indicate something went very wrong. */
                         this->CloseSessionImpl(session);
-                        return ResultSuccess();
+                        R_SUCCEED();
                     }
                 } R_END_TRY_CATCH;
 
                 /* We succeeded, so we can process future messages on this session. */
-                this->RegisterSessionToWaitList(session);
-                return ResultSuccess();
+                this->RegisterServerSessionToWait(session);
+                R_SUCCEED();
             }
         }
     }
@@ -260,18 +282,19 @@ namespace ams::sf::hipc {
         switch (cmif_command_type) {
             case CmifCommandType_Request:
             case CmifCommandType_RequestWithContext:
-                return this->DispatchRequest(session->srv_obj_holder.Clone(), session, in_message, out_message);
+                R_RETURN(this->DispatchRequest(session->m_srv_obj_holder.Clone(), session, in_message, out_message));
             case CmifCommandType_Control:
             case CmifCommandType_ControlWithContext:
-                return this->DispatchManagerRequest(session, in_message, out_message);
+                R_RETURN(this->DispatchManagerRequest(session, in_message, out_message));
             default:
-                return sf::hipc::ResultUnknownCommandType();
+                R_THROW(sf::hipc::ResultUnknownCommandType());
         }
     }
 
     Result ServerSessionManager::DispatchManagerRequest(ServerSession *session, const cmif::PointerAndSize &in_message, const cmif::PointerAndSize &out_message) {
         /* This will get overridden by ... WithDomain class. */
-        return sf::ResultNotSupported();
+        AMS_UNUSED(session, in_message, out_message);
+        R_THROW(sf::ResultNotSupported());
     }
 
     Result ServerSessionManager::DispatchRequest(cmif::ServiceObjectHolder &&obj_holder, ServerSession *session, const cmif::PointerAndSize &in_message, const cmif::PointerAndSize &out_message) {
@@ -282,8 +305,8 @@ namespace ams::sf::hipc {
             .manager = this,
             .session = session,
             .processor = nullptr, /* Filled in by template implementations. */
-            .handles_to_close = &handles_to_close,
-            .pointer_buffer = session->pointer_buffer,
+            .handles_to_close = std::addressof(handles_to_close),
+            .pointer_buffer = session->m_pointer_buffer,
             .in_message_buffer = in_message,
             .out_message_buffer = out_message,
             .request = hipcParseRequest(in_message.GetPointer()),
@@ -310,13 +333,13 @@ namespace ams::sf::hipc {
         {
             ON_SCOPE_EXIT {
                 for (size_t i = 0; i < handles_to_close.num_handles; i++) {
-                    R_ABORT_UNLESS(svcCloseHandle(handles_to_close.handles[i]));
+                    os::CloseNativeHandle(handles_to_close.handles[i]);
                 }
             };
-            R_TRY(hipc::Reply(session->session_handle, out_message));
+            R_TRY(hipc::Reply(session->m_session_handle, out_message));
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
 

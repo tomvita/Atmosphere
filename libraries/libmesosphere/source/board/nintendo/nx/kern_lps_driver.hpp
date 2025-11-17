@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -22,7 +22,7 @@ namespace ams::kern::board::nintendo::nx {
 
         void Initialize();
         Result EnableSuspend(bool enable);
-        void InvokeCpuSleepHandler(uintptr_t arg, uintptr_t entry);
+        void InvokeCpuSleepHandler(uintptr_t arg, uintptr_t entry, uintptr_t entry_arg);
         void ResumeBpmpFirmware();
 
     }

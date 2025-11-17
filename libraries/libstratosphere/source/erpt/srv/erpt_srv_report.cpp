@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -21,7 +21,7 @@ namespace ams::erpt::srv {
 
     ReportFileName Report::FileName(ReportId report_id, bool redirect_to_sd) {
         ReportFileName report_name;
-        std::snprintf(report_name.name, sizeof(report_name.name),
+        util::SNPrintf(report_name.name, sizeof(report_name.name),
                       "%s:/%08x-%04x-%04x-%02x%02x-%04x%08x",
                       (redirect_to_sd ? ReportOnSdStoragePath : ReportStoragePath),
                       report_id.uuid_data.time_low,
@@ -34,57 +34,59 @@ namespace ams::erpt::srv {
         return report_name;
     }
 
-    Report::Report(JournalRecord<ReportInfo> *r, bool redirect_to_sd) : record(r), redirect_to_sd_card(redirect_to_sd) {
-        this->record->AddReference();
+    Report::Report(JournalRecord<ReportInfo> *r, bool redirect_to_sd) : m_record(r), m_redirect_to_sd_card(redirect_to_sd) {
+        m_record->AddReference();
     }
 
     Report::~Report() {
         this->CloseStream();
-        if (this->record->RemoveReference()) {
-            this->DeleteStream(this->FileName().name);
-            delete this->record;
+        if (m_record->RemoveReference()) {
+            if (R_FAILED(this->DeleteStream(this->FileName().name))) {
+                /* TODO: Log failure? */
+            }
+            delete m_record;
         }
     }
 
-    ReportFileName Report::FileName() {
-        return FileName(this->record->info.id, this->redirect_to_sd_card);
+    ReportFileName Report::FileName() const {
+        return FileName(m_record->m_info.id, m_redirect_to_sd_card);
     }
 
     Result Report::Open(ReportOpenType type) {
         switch (type) {
-            case ReportOpenType_Create: return this->OpenStream(this->FileName().name, StreamMode_Write, ReportStreamBufferSize);
-            case ReportOpenType_Read:   return this->OpenStream(this->FileName().name, StreamMode_Read,  ReportStreamBufferSize);
-            default:                    return erpt::ResultInvalidArgument();
+            case ReportOpenType_Create: R_RETURN(this->OpenStream(this->FileName().name, StreamMode_Write, ReportStreamBufferSize));
+            case ReportOpenType_Read:   R_RETURN(this->OpenStream(this->FileName().name, StreamMode_Read,  ReportStreamBufferSize));
+            default:                    R_THROW(erpt::ResultInvalidArgument());
         }
     }
 
     Result Report::Read(u32 *out_read_count, u8 *dst, u32 dst_size) {
-        return this->ReadStream(out_read_count, dst, dst_size);
+        R_RETURN(this->ReadStream(out_read_count, dst, dst_size));
     }
 
     Result Report::Delete() {
-        return this->DeleteStream(this->FileName().name);
+        R_RETURN(this->DeleteStream(this->FileName().name));
     }
 
     void Report::Close() {
         return this->CloseStream();
     }
 
-    Result Report::GetFlags(ReportFlagSet *out) {
-        *out = this->record->info.flags;
-        return ResultSuccess();
+    Result Report::GetFlags(ReportFlagSet *out) const {
+        *out = m_record->m_info.flags;
+        R_SUCCEED();
     }
 
     Result Report::SetFlags(ReportFlagSet flags) {
-        if (((~this->record->info.flags) & flags).IsAnySet()) {
-            this->record->info.flags |= flags;
-            return Journal::Commit();
+        if (((~m_record->m_info.flags) & flags).IsAnySet()) {
+            m_record->m_info.flags |= flags;
+            R_RETURN(Journal::Commit());
         }
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
-    Result Report::GetSize(s64 *out) {
-        return this->GetStreamSize(out);
+    Result Report::GetSize(s64 *out) const {
+        R_RETURN(this->GetStreamSize(out));
     }
 
 }

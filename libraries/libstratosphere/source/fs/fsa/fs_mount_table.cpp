@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -27,7 +27,7 @@ namespace ams::fs::impl {
     }
 
     bool MountTable::CanAcceptMountName(const char *name) {
-        for (const auto &fs : this->fs_list) {
+        for (const auto &fs : m_fs_list) {
             if (MatchesName(fs, name)) {
                 return false;
             }
@@ -36,34 +36,34 @@ namespace ams::fs::impl {
     }
 
     Result MountTable::Mount(std::unique_ptr<FileSystemAccessor> &&fs) {
-        std::scoped_lock lk(this->mutex);
+        std::scoped_lock lk(m_mutex);
 
         R_UNLESS(this->CanAcceptMountName(fs->GetName()), fs::ResultMountNameAlreadyExists());
 
-        this->fs_list.push_back(*fs.release());
-        return ResultSuccess();
+        m_fs_list.push_back(*fs.release());
+        R_SUCCEED();
     }
 
     Result MountTable::Find(FileSystemAccessor **out, const char *name) {
-        std::scoped_lock lk(this->mutex);
+        std::scoped_lock lk(m_mutex);
 
-        for (auto &fs : this->fs_list) {
+        for (auto &fs : m_fs_list) {
             if (MatchesName(fs, name)) {
                 *out = std::addressof(fs);
-                return ResultSuccess();
+                R_SUCCEED();
             }
         }
 
-        return fs::ResultNotMounted();
+        R_THROW(fs::ResultNotMounted());
     }
 
     void MountTable::Unmount(const char *name) {
-        std::scoped_lock lk(this->mutex);
+        std::scoped_lock lk(m_mutex);
 
-        for (auto it = this->fs_list.cbegin(); it != this->fs_list.cend(); it++) {
+        for (auto it = m_fs_list.cbegin(); it != m_fs_list.cend(); it++) {
             if (MatchesName(*it, name)) {
                 auto p = std::addressof(*it);
-                this->fs_list.erase(it);
+                m_fs_list.erase(it);
                 delete p;
                 return;
             }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,8 +19,13 @@
 namespace ams::settings::impl {
 
     Result GetPlatformRegion(s32 *out) {
+        #if defined(ATMOSPHERE_OS_HORIZON)
         static_assert(sizeof(*out) == sizeof(::SetSysPlatformRegion));
-        return ::setsysGetPlatformRegion(reinterpret_cast<::SetSysPlatformRegion *>(out));
+        R_RETURN(::setsysGetPlatformRegion(reinterpret_cast<::SetSysPlatformRegion *>(out)));
+        #else
+        AMS_UNUSED(out);
+        AMS_ABORT("TODO");
+        #endif
     }
 
 }

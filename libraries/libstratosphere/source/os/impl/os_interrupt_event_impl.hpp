@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,6 +18,12 @@
 
 #if defined(ATMOSPHERE_OS_HORIZON)
     #include "os_interrupt_event_target_impl.os.horizon.hpp"
+#elif defined(ATMOSPHERE_OS_WINDOWS)
+    #include "os_interrupt_event_target_impl.os.windows.hpp"
+#elif defined(ATMOSPHERE_OS_LINUX)
+    #include "os_interrupt_event_target_impl.os.linux.hpp"
+#elif defined(ATMOSPHERE_OS_MACOS)
+    #include "os_interrupt_event_target_impl.os.macos.hpp"
 #else
     #error "Unknown OS for ams::os::InterruptEventImpl"
 #endif
@@ -26,32 +32,32 @@ namespace ams::os::impl {
 
     class InterruptEventImpl {
         private:
-            InterruptEventTargetImpl impl;
+            InterruptEventTargetImpl m_impl;
         public:
-            explicit InterruptEventImpl(InterruptName name, EventClearMode clear_mode) : impl(name, clear_mode) { /* ... */ }
+            explicit InterruptEventImpl(InterruptName name, EventClearMode clear_mode) : m_impl(name, clear_mode) { /* ... */ }
 
             void Clear() {
-                return this->impl.Clear();
+                return m_impl.Clear();
             }
 
             void Wait() {
-                return this->impl.Wait();
+                return m_impl.Wait();
             }
 
             bool TryWait() {
-                return this->impl.TryWait();
+                return m_impl.TryWait();
             }
 
             bool TimedWait(TimeSpan timeout) {
-                return this->impl.TimedWait(timeout);
+                return m_impl.TimedWait(timeout);
             }
 
             TriBool IsSignaled() {
-                return this->impl.IsSignaled();
+                return m_impl.IsSignaled();
             }
 
-            Handle GetHandle() const {
-                return this->impl.GetHandle();
+            NativeHandle GetHandle() const {
+                return m_impl.GetHandle();
             }
     };
 

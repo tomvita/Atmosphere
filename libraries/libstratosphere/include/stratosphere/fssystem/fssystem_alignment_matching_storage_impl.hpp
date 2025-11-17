@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,10 +19,19 @@
 
 namespace ams::fssystem {
 
+    /* ACCURATE_TO_VERSION: Unknown */
     class AlignmentMatchingStorageImpl {
         public:
             static Result Read(fs::IStorage *base_storage, char *work_buf, size_t work_buf_size, size_t data_alignment, size_t buffer_alignment, s64 offset, char *buffer, size_t size);
             static Result Write(fs::IStorage *base_storage, char *work_buf, size_t work_buf_size, size_t data_alignment, size_t buffer_alignment, s64 offset, const char *buffer, size_t size);
+
+            static Result Read(std::shared_ptr<fs::IStorage> &base_storage, char *work_buf, size_t work_buf_size, size_t data_alignment, size_t buffer_alignment, s64 offset, char *buffer, size_t size) {
+                R_RETURN(Read(base_storage.get(), work_buf, work_buf_size, data_alignment, buffer_alignment, offset, buffer, size));
+            }
+
+            static Result Write(std::shared_ptr<fs::IStorage> &base_storage, char *work_buf, size_t work_buf_size, size_t data_alignment, size_t buffer_alignment, s64 offset, const char *buffer, size_t size) {
+                R_RETURN(Write(base_storage.get(), work_buf, work_buf_size, data_alignment, buffer_alignment, offset, buffer, size));
+            }
     };
 
 }

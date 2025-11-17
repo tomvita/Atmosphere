@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,11 +19,7 @@
 
 #include "kern_bpmp_api.hpp"
 #include "kern_atomics_registers.hpp"
-#include "kern_clkrst_registers.hpp"
-#include "kern_evp_registers.hpp"
-#include "kern_flow_registers.hpp"
 #include "kern_ictlr_registers.hpp"
-#include "kern_pmc_registers.hpp"
 #include "kern_sema_registers.hpp"
 
 namespace ams::kern::board::nintendo::nx::lps {
@@ -396,10 +392,10 @@ namespace ams::kern::board::nintendo::nx::lps {
         /* Instruct BPMP to enable suspend-to-sc7. */
         R_UNLESS(BpmpEnableSuspend(TEGRA_BPMP_PM_SC7, 0) == 0, svc::ResultInvalidState());
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
-    void InvokeCpuSleepHandler(uintptr_t arg, uintptr_t entry) {
+    void InvokeCpuSleepHandler(uintptr_t arg, uintptr_t entry, uintptr_t entry_arg) {
         /* Verify that we're allowed to perform suspension. */
         MESOSPHERE_ABORT_UNLESS(g_lps_init_done);
         MESOSPHERE_ABORT_UNLESS(GetCurrentCoreId() == 0);
@@ -420,7 +416,7 @@ namespace ams::kern::board::nintendo::nx::lps {
         Read(g_pmc_address + APBDEV_PMC_SCRATCH0);
 
         /* Invoke the sleep hander. */
-        KSleepManager::CpuSleepHandler(arg, entry);
+        KSleepManager::CpuSleepHandler(arg, entry, entry_arg);
 
         /* Disable deep power down. */
         Write(g_pmc_address + APBDEV_PMC_DPD_ENABLE, 0);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -42,17 +42,17 @@ namespace ams::erpt::srv {
 
         /* Close and commit the stream. */
         stream.CloseStream();
-        stream.CommitStream();
+        R_TRY(stream.CommitStream());
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result Journal::Delete(ReportId report_id) {
-        return JournalForReports::DeleteReport(report_id);
+        R_RETURN(JournalForReports::DeleteReport(report_id));
     }
 
-    Result Journal::GetAttachmentList(AttachmentList *out, ReportId report_id) {
-        return JournalForAttachments::GetAttachmentList(out, report_id);
+    Result Journal::GetAttachmentList(u32 *out_count, AttachmentInfo *out_infos, size_t max_out_infos, ReportId report_id) {
+        R_RETURN(JournalForAttachments::GetAttachmentList(out_count, out_infos, max_out_infos, report_id));
     }
 
     util::Uuid Journal::GetJournalId() {
@@ -64,7 +64,7 @@ namespace ams::erpt::srv {
     }
 
     Result Journal::GetReportList(ReportList *out, ReportType type_filter) {
-        return JournalForReports::GetReportList(out, type_filter);
+        R_RETURN(JournalForReports::GetReportList(out, type_filter));
     }
 
     u32 Journal::GetStoredReportCount(ReportType type) {
@@ -97,7 +97,7 @@ namespace ams::erpt::srv {
         /* Restore the attachments. */
         R_TRY(JournalForAttachments::RestoreJournal(std::addressof(stream)));
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     JournalRecord<ReportInfo> *Journal::Retrieve(ReportId report_id) {
@@ -109,11 +109,11 @@ namespace ams::erpt::srv {
     }
 
     Result Journal::Store(JournalRecord<ReportInfo> *record) {
-        return JournalForReports::StoreRecord(record);
+        R_RETURN(JournalForReports::StoreRecord(record));
     }
 
     Result Journal::Store(JournalRecord<AttachmentInfo> *record) {
-        return JournalForAttachments::StoreRecord(record);
+        R_RETURN(JournalForAttachments::StoreRecord(record));
     }
 
 }

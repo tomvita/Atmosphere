@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -30,10 +30,10 @@ namespace ams::erpt::srv {
 
     class Report : public Allocator, public Stream {
         private:
-            JournalRecord<ReportInfo> *record;
-            bool redirect_to_sd_card;
+            JournalRecord<ReportInfo> *m_record;
+            bool m_redirect_to_sd_card;
         private:
-            ReportFileName FileName();
+            ReportFileName FileName() const;
         public:
             static ReportFileName FileName(ReportId report_id, bool redirect_to_sd);
         public:
@@ -45,18 +45,18 @@ namespace ams::erpt::srv {
             Result Delete();
             void Close();
 
-            Result GetFlags(ReportFlagSet *out);
+            Result GetFlags(ReportFlagSet *out) const;
             Result SetFlags(ReportFlagSet flags);
-            Result GetSize(s64 *out);
+            Result GetSize(s64 *out) const;
 
             template<typename T>
             Result Write(T val) {
-                return this->WriteStream(reinterpret_cast<const u8 *>(std::addressof(val)), sizeof(val));
+                R_RETURN(this->WriteStream(reinterpret_cast<const u8 *>(std::addressof(val)), sizeof(val)));
             }
 
             template<typename T>
             Result Write(const T *buf, u32 buffer_size) {
-                return this->WriteStream(reinterpret_cast<const u8 *>(buf), buffer_size);
+                R_RETURN(this->WriteStream(reinterpret_cast<const u8 *>(buf), buffer_size));
             }
     };
 

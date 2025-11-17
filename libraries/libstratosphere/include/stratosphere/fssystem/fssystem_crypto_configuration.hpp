@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -16,6 +16,7 @@
 #pragma once
 #include <vapours.hpp>
 #include <stratosphere/fssystem/fssystem_nca_file_system_driver.hpp>
+#include <stratosphere/ncm/ncm_content_meta_platform.hpp>
 
 namespace ams::fssystem {
 
@@ -25,10 +26,13 @@ namespace ams::fssystem {
 
     void InvalidateHardwareAesKey();
 
-    const u8 *GetAcidSignatureKeyModulus(bool prod, size_t key_generation);
+    bool IsValidSignatureKeyGeneration(ncm::ContentMetaPlatform platform, size_t key_generation);
+
+    const u8 *GetAcidSignatureKeyModulus(ncm::ContentMetaPlatform platform, bool prod, size_t key_generation, bool unk_unused);
+    size_t GetAcidSignatureKeyModulusSize(ncm::ContentMetaPlatform platform, bool unk_unused);
+
     const u8 *GetAcidSignatureKeyPublicExponent();
 
-    constexpr inline size_t AcidSignatureKeyModulusSize        = NcaCryptoConfiguration::Rsa2048KeyModulusSize;
     constexpr inline size_t AcidSignatureKeyPublicExponentSize = NcaCryptoConfiguration::Rsa2048KeyPublicExponentSize;
 
 }

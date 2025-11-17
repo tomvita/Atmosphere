@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,13 +18,13 @@
 
 namespace ams::diag {
 
-    NORETURN void AbortImpl(const char *file, int line, const char *func, const char *expr, u64 value, const char *format, ...) {
-        AMS_UNUSED(file, line, func, expr, value, format);
+    NORETURN void AbortImpl(const char *expr, const char *func, const char *file, int line) {
+        AMS_UNUSED(expr, func, line, file);
         ams::secmon::loader::ErrorReboot();
     }
 
-    NORETURN void AbortImpl(const char *file, int line, const char *func, const char *expr, u64 value) {
-        AMS_UNUSED(file, line, func, expr, value);
+    NORETURN void AbortImpl(const char *expr, const char *func, const char *file, int line, const char *format, ...) {
+        AMS_UNUSED(expr, func, line, file, format);
         ams::secmon::loader::ErrorReboot();
     }
 

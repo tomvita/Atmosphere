@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -21,7 +21,7 @@
 namespace ams::os {
 
     struct ThreadType;
-    struct WaitableHolderType;
+    struct MultiWaitHolderType;
 
     Result CreateThread(ThreadType *thread, ThreadFunction function, void *argument, void *stack, size_t stack_size, s32 priority, s32 ideal_core);
     Result CreateThread(ThreadType *thread, ThreadFunction function, void *argument, void *stack, size_t stack_size, s32 priority);
@@ -39,8 +39,6 @@ namespace ams::os {
     s32 SuspendThread(ThreadType *thread);
     s32 ResumeThread(ThreadType *thread);
     s32 GetThreadSuspendCount(const ThreadType *thread);
-
-    void CancelThreadSynchronization(ThreadType *Thread);
 
     /* TODO: void GetThreadContext(ThreadContextInfo *out_context, const ThreadType *thread); */
 
@@ -62,6 +60,6 @@ namespace ams::os {
 
     ThreadId GetThreadId(const ThreadType *thread);
 
-    void InitializeWaitableHolder(WaitableHolderType *holder, ThreadType *thread);
+    void InitializeMultiWaitHolder(MultiWaitHolderType *holder, ThreadType *thread);
 
 }

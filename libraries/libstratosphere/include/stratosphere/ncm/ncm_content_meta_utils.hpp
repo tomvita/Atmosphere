@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -23,10 +23,22 @@
 
 namespace ams::ncm {
 
-    using MountContentMetaFunction = Result (*)(const char *mount_name, const char *path);
+    using MountContentMetaFunction = Result (*)(const char *mount_name, const char *path, fs::ContentAttributes attr);
 
-    Result ReadContentMetaPath(AutoBuffer *out, const char *path);
-    Result ReadVariationContentMetaInfoList(s32 *out_count, std::unique_ptr<ContentMetaInfo[]> *out_meta_infos, const Path &path, FirmwareVariationId firmware_variation_id);
+    bool IsContentMetaFileName(const char *name);
+
+    Result ReadContentMetaPathAlongWithExtendedDataAndDigest(AutoBuffer *out, const char *path, fs::ContentAttributes attr);
+    Result ReadContentMetaPathAlongWithExtendedDataAndDigestSuppressingFsAbort(AutoBuffer *out, const char *path, fs::ContentAttributes attr);
+
+    Result ReadContentMetaPathWithoutExtendedDataOrDigest(AutoBuffer *out, const char *path, fs::ContentAttributes attr);
+    Result ReadContentMetaPathWithoutExtendedDataOrDigestSuppressingFsAbort(AutoBuffer *out, const char *path, fs::ContentAttributes attr);
+
+    using ReadContentMetaPathFunction = Result (*)(AutoBuffer *out, const char *path, fs::ContentAttributes attr);
+
+    Result TryReadContentMetaPath(fs::ContentAttributes *out_attr, AutoBuffer *out, const char *path, ReadContentMetaPathFunction func);
+    Result TryReadContentMetaPath(AutoBuffer *out, const char *path, ReadContentMetaPathFunction func);
+
+    Result ReadVariationContentMetaInfoList(s32 *out_count, std::unique_ptr<ContentMetaInfo[]> *out_meta_infos, const Path &path, fs::ContentAttributes attr, FirmwareVariationId firmware_variation_id);
 
     void SetMountContentMetaFunction(MountContentMetaFunction func);
 

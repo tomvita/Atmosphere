@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,12 +18,14 @@
 namespace ams::sf::cmif {
 
     Result DomainServiceObjectDispatchTable::ProcessMessage(ServiceDispatchContext &ctx, const cmif::PointerAndSize &in_raw_data) const  {
-        return this->ProcessMessageImpl(ctx, static_cast<DomainServiceObject *>(ctx.srv_obj)->GetServerDomain(), in_raw_data);
+        R_RETURN(this->ProcessMessageImpl(ctx, static_cast<DomainServiceObject *>(ctx.srv_obj)->GetServerDomain(), in_raw_data));
     }
 
+    #if AMS_SF_MITM_SUPPORTED
     Result DomainServiceObjectDispatchTable::ProcessMessageForMitm(ServiceDispatchContext &ctx, const cmif::PointerAndSize &in_raw_data) const {
-        return this->ProcessMessageForMitmImpl(ctx, static_cast<DomainServiceObject *>(ctx.srv_obj)->GetServerDomain(), in_raw_data);
+        R_RETURN(this->ProcessMessageForMitmImpl(ctx, static_cast<DomainServiceObject *>(ctx.srv_obj)->GetServerDomain(), in_raw_data));
     }
+    #endif
 
     Result DomainServiceObjectDispatchTable::ProcessMessageImpl(ServiceDispatchContext &ctx, ServerDomainBase *domain, const cmif::PointerAndSize &in_raw_data) const {
         const CmifDomainInHeader *in_header = reinterpret_cast<const CmifDomainInHeader *>(in_raw_data.GetPointer());
@@ -43,22 +45,23 @@ namespace ams::sf::cmif {
                 std::memcpy(in_object_ids, reinterpret_cast<DomainObjectId *>(in_message_raw_data.GetAddress() + in_message_raw_data.GetSize()), sizeof(DomainObjectId) * in_header->num_in_objects);
                 DomainServiceObjectProcessor domain_processor(domain, in_object_ids, in_header->num_in_objects);
                 if (ctx.processor == nullptr) {
-                    ctx.processor = &domain_processor;
+                    ctx.processor = std::addressof(domain_processor);
                 } else {
-                    ctx.processor->SetImplementationProcessor(&domain_processor);
+                    ctx.processor->SetImplementationProcessor(std::addressof(domain_processor));
                 }
                 ctx.srv_obj = target_object.GetServiceObjectUnsafe();
-                return target_object.ProcessMessage(ctx, in_message_raw_data);
+                R_RETURN(target_object.ProcessMessage(ctx, in_message_raw_data));
             }
             case CmifDomainRequestType_Close:
                 /* TODO: N doesn't error check here. Should we? */
                 domain->UnregisterObject(target_object_id);
-                return ResultSuccess();
+                R_SUCCEED();
             default:
-                return sf::cmif::ResultInvalidInHeader();
+                R_THROW(sf::cmif::ResultInvalidInHeader());
         }
     }
 
+    #if AMS_SF_MITM_SUPPORTED
     Result DomainServiceObjectDispatchTable::ProcessMessageForMitmImpl(ServiceDispatchContext &ctx, ServerDomainBase *domain, const cmif::PointerAndSize &in_raw_data) const {
         const CmifDomainInHeader *in_header = reinterpret_cast<const CmifDomainInHeader *>(in_raw_data.GetPointer());
         R_UNLESS(in_raw_data.GetSize() >= sizeof(*in_header), sf::cmif::ResultInvalidHeaderSize());
@@ -72,7 +75,7 @@ namespace ams::sf::cmif {
 
                 /* Mitm. If we don't have a target object, we should forward to let the server handle. */
                 if (!target_object) {
-                    return ctx.session->ForwardRequest(ctx);
+                    R_RETURN(ctx.session->ForwardRequest(ctx));
                 }
 
                 R_UNLESS(in_header->data_size + in_header->num_in_objects * sizeof(DomainObjectId) <= in_domain_raw_data.GetSize(), sf::cmif::ResultInvalidHeaderSize());
@@ -82,12 +85,12 @@ namespace ams::sf::cmif {
                 std::memcpy(in_object_ids, reinterpret_cast<DomainObjectId *>(in_message_raw_data.GetAddress() + in_message_raw_data.GetSize()), sizeof(DomainObjectId) * in_header->num_in_objects);
                 DomainServiceObjectProcessor domain_processor(domain, in_object_ids, in_header->num_in_objects);
                 if (ctx.processor == nullptr) {
-                    ctx.processor = &domain_processor;
+                    ctx.processor = std::addressof(domain_processor);
                 } else {
-                    ctx.processor->SetImplementationProcessor(&domain_processor);
+                    ctx.processor->SetImplementationProcessor(std::addressof(domain_processor));
                 }
                 ctx.srv_obj = target_object.GetServiceObjectUnsafe();
-                return target_object.ProcessMessage(ctx, in_message_raw_data);
+                R_RETURN(target_object.ProcessMessage(ctx, in_message_raw_data));
             }
             case CmifDomainRequestType_Close:
             {
@@ -95,39 +98,40 @@ namespace ams::sf::cmif {
 
                 /* If the object is not in the domain, tell the server to close it. */
                 if (!target_object) {
-                    return ctx.session->ForwardRequest(ctx);
+                    R_RETURN(ctx.session->ForwardRequest(ctx));
                 }
 
                 /* If the object is in the domain, close our copy of it. Mitm objects are required to close their associated domain id, so this shouldn't cause desynch. */
                 domain->UnregisterObject(target_object_id);
-                return ResultSuccess();
+                R_SUCCEED();
             }
             default:
-                return sf::cmif::ResultInvalidInHeader();
+                R_THROW(sf::cmif::ResultInvalidInHeader());
         }
     }
+    #endif
 
     Result DomainServiceObjectProcessor::PrepareForProcess(const ServiceDispatchContext &ctx, const ServerMessageRuntimeMetadata runtime_metadata) const {
         /* Validate in object count. */
-        R_UNLESS(this->impl_metadata.GetInObjectCount() == this->GetInObjectCount(), sf::cmif::ResultInvalidNumInObjects());
+        R_UNLESS(m_impl_metadata.GetInObjectCount() == this->GetInObjectCount(), sf::cmif::ResultInvalidNumInObjects());
 
         /* Nintendo reserves domain object IDs here. We do this later, to support mitm semantics. */
 
         /* Pass onwards. */
-        return this->impl_processor->PrepareForProcess(ctx, runtime_metadata);
+        R_RETURN(m_impl_processor->PrepareForProcess(ctx, runtime_metadata));
     }
 
     Result DomainServiceObjectProcessor::GetInObjects(ServiceObjectHolder *in_objects) const {
         for (size_t i = 0; i < this->GetInObjectCount(); i++) {
-            in_objects[i] = this->domain->GetObject(this->in_object_ids[i]);
+            in_objects[i] = m_domain->GetObject(m_in_object_ids[i]);
         }
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     HipcRequest DomainServiceObjectProcessor::PrepareForReply(const cmif::ServiceDispatchContext &ctx, PointerAndSize &out_raw_data, const ServerMessageRuntimeMetadata runtime_metadata) {
         /* Call into impl processor, get request. */
         PointerAndSize raw_data;
-        HipcRequest request = this->impl_processor->PrepareForReply(ctx, raw_data, runtime_metadata);
+        HipcRequest request = m_impl_processor->PrepareForReply(ctx, raw_data, runtime_metadata);
 
         /* Write out header. */
         constexpr size_t out_header_size = sizeof(CmifDomainOutHeader);
@@ -137,7 +141,7 @@ namespace ams::sf::cmif {
 
         /* Set output raw data. */
         out_raw_data = cmif::PointerAndSize(raw_data.GetAddress() + out_header_size, raw_data.GetSize() - out_header_size);
-        this->out_object_ids = reinterpret_cast<DomainObjectId *>(out_raw_data.GetAddress() + impl_out_data_total_size);
+        m_out_object_ids = reinterpret_cast<DomainObjectId *>(out_raw_data.GetAddress() + impl_out_data_total_size);
 
         return request;
     }
@@ -145,7 +149,7 @@ namespace ams::sf::cmif {
     void DomainServiceObjectProcessor::PrepareForErrorReply(const cmif::ServiceDispatchContext &ctx, PointerAndSize &out_raw_data, const ServerMessageRuntimeMetadata runtime_metadata) {
         /* Call into impl processor, get request. */
         PointerAndSize raw_data;
-        this->impl_processor->PrepareForErrorReply(ctx, raw_data, runtime_metadata);
+        m_impl_processor->PrepareForErrorReply(ctx, raw_data, runtime_metadata);
 
         /* Write out header. */
         constexpr size_t out_header_size = sizeof(CmifDomainOutHeader);
@@ -160,6 +164,8 @@ namespace ams::sf::cmif {
     }
 
     void DomainServiceObjectProcessor::SetOutObjects(const cmif::ServiceDispatchContext &ctx, const HipcRequest &response, ServiceObjectHolder *out_objects, DomainObjectId *selected_ids) {
+        AMS_UNUSED(ctx, response);
+
         const size_t num_out_objects = this->GetOutObjectCount();
 
         /* Copy input object IDs from command impl (normally these are Invalid, in mitm they should be set). */
@@ -186,8 +192,8 @@ namespace ams::sf::cmif {
                     }
                 }
                 /* TODO: Can we make this error non-fatal? It isn't for N, since they can reserve IDs earlier due to not having to worry about mitm. */
-                R_ABORT_UNLESS(this->domain->ReserveIds(reservations, num_unreserved_ids));
-                this->domain->ReserveSpecificIds(specific_ids, num_specific_ids);
+                R_ABORT_UNLESS(m_domain->ReserveIds(reservations, num_unreserved_ids));
+                m_domain->ReserveSpecificIds(specific_ids, num_specific_ids);
             }
 
             size_t reservation_index = 0;
@@ -203,17 +209,17 @@ namespace ams::sf::cmif {
         for (size_t i = 0; i < num_out_objects; i++) {
             if (!out_objects[i]) {
                 if (is_reserved[i]) {
-                    this->domain->UnreserveIds(object_ids + i, 1);
+                    m_domain->UnreserveIds(object_ids + i, 1);
                 }
                 object_ids[i] = InvalidDomainObjectId;
                 continue;
             }
-            this->domain->RegisterObject(object_ids[i], std::move(out_objects[i]));
+            m_domain->RegisterObject(object_ids[i], std::move(out_objects[i]));
         }
 
         /* Set out object IDs in message. */
         for (size_t i = 0; i < num_out_objects; i++) {
-            this->out_object_ids[i] = object_ids[i];
+            m_out_object_ids[i] = object_ids[i];
         }
     }
 

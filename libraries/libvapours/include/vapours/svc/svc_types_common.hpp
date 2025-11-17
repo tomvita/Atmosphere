@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -27,20 +27,20 @@ namespace ams::svc {
     /* Utility classes required to encode information into the type system for SVC veneers. */
     class Size {
         private:
-            size_t size;
+            size_t m_size;
         public:
-            constexpr ALWAYS_INLINE Size(size_t s) : size(s) { /* ... */ }
-            constexpr ALWAYS_INLINE operator size_t() { return this->size; }
+            constexpr ALWAYS_INLINE Size(size_t s) : m_size(s) { /* ... */ }
+            constexpr ALWAYS_INLINE operator size_t() { return m_size; }
     };
     static_assert(sizeof(Size) == sizeof(size_t));
     static_assert(std::is_trivially_destructible<Size>::value);
 
     class Address {
         private:
-            uintptr_t uintptr;
+            uintptr_t m_uintptr;
         public:
-            constexpr ALWAYS_INLINE Address(uintptr_t u) : uintptr(u) { /* ... */ }
-            constexpr ALWAYS_INLINE operator uintptr_t() { return this->uintptr; }
+            constexpr ALWAYS_INLINE Address(uintptr_t u) : m_uintptr(u) { /* ... */ }
+            constexpr ALWAYS_INLINE operator uintptr_t() { return m_uintptr; }
     };
     static_assert(sizeof(Address) == sizeof(uintptr_t));
     static_assert(std::is_trivially_destructible<Address>::value);
@@ -57,11 +57,11 @@ namespace ams::svc {
             static_assert(std::is_pointer<T>::value);
             static constexpr bool IsInput = std::is_const<typename std::remove_pointer<T>::type>::value;
         private:
-            T pointer;
+            T m_pointer;
         public:
-            constexpr ALWAYS_INLINE UserPointer(T p) : pointer(p) { /* ... */ }
+            constexpr ALWAYS_INLINE UserPointer(T p) : m_pointer(p) { /* ... */ }
 
-            constexpr ALWAYS_INLINE T GetPointerUnsafe() { return this->pointer; }
+            constexpr ALWAYS_INLINE T GetPointerUnsafe() { return m_pointer; }
     };
 
     template<typename T>
@@ -94,6 +94,8 @@ namespace ams::svc {
         MemoryState_Kernel           = 0x13,
         MemoryState_GeneratedCode    = 0x14,
         MemoryState_CodeOut          = 0x15,
+        MemoryState_Coverage         = 0x16,
+        MemoryState_Insecure         = 0x17,
     };
 
     enum MemoryPermission : u32 {
@@ -110,10 +112,17 @@ namespace ams::svc {
     };
 
     enum MemoryAttribute : u32 {
-        MemoryAttribute_Locked       = (1 << 0),
-        MemoryAttribute_IpcLocked    = (1 << 1),
-        MemoryAttribute_DeviceShared = (1 << 2),
-        MemoryAttribute_Uncached     = (1 << 3),
+        MemoryAttribute_Locked           = (1 << 0),
+        MemoryAttribute_IpcLocked        = (1 << 1),
+        MemoryAttribute_DeviceShared     = (1 << 2),
+        MemoryAttribute_Uncached         = (1 << 3),
+        MemoryAttribute_PermissionLocked = (1 << 4),
+    };
+
+    enum MemoryMapping : u32 {
+        MemoryMapping_IoRegister = 0,
+        MemoryMapping_Uncached   = 1,
+        MemoryMapping_Memory     = 2,
     };
 
     constexpr inline size_t HeapSizeAlignment = 2_MB;
@@ -128,6 +137,27 @@ namespace ams::svc {
         MemoryRegionType_OnMemoryBootImage = 2,
         MemoryRegionType_DTB               = 3,
         MemoryRegionType_Count,
+    };
+
+    enum MapDeviceAddressSpaceFlag : u32 {
+        MapDeviceAddressSpaceFlag_None          = (0 << 0),
+        MapDeviceAddressSpaceFlag_NotIoRegister = (1 << 0),
+    };
+
+    struct MapDeviceAddressSpaceOption {
+        using Permission = util::BitPack32::Field<0,                16, MemoryPermission>;
+        using Flags      = util::BitPack32::Field<Permission::Next,  1, MapDeviceAddressSpaceFlag>;
+        using Reserved   = util::BitPack32::Field<Flags::Next,      15, u32>;
+
+        static constexpr ALWAYS_INLINE u32 Encode(MemoryPermission perm, u32 flags) {
+            util::BitPack32 pack{};
+
+            pack.Set<Permission>(perm);
+            pack.Set<Flags>(static_cast<svc::MapDeviceAddressSpaceFlag>(flags));
+            pack.Set<Reserved>(0);
+
+            return pack.value;
+        }
     };
 
     /* Info Types. */
@@ -156,10 +186,16 @@ namespace ams::svc {
         InfoType_TotalNonSystemMemorySize       = 21,
         InfoType_UsedNonSystemMemorySize        = 22,
         InfoType_IsApplication                  = 23,
+        InfoType_FreeThreadCount                = 24,
+        InfoType_ThreadTickCount                = 25,
+        InfoType_IsSvcPermitted                 = 26,
+        InfoType_IoRegionHint                   = 27,
+        InfoType_AliasRegionExtraSize           = 28,
+        /* ... */
+        InfoType_TransferMemoryHint             = 34,
 
         InfoType_MesosphereMeta                 = 65000,
-
-        InfoType_ThreadTickCount                = 0xF0000002,
+        InfoType_MesosphereCurrentProcess       = 65001,
     };
 
     enum TickCountInfo : u64 {
@@ -172,8 +208,9 @@ namespace ams::svc {
     };
 
     enum MesosphereMetaInfo : u64 {
-        MesosphereMetaInfo_KernelVersion   = 0,
-        MesosphereMetaInfo_IsKTraceEnabled = 1,
+        MesosphereMetaInfo_KernelVersion       = 0,
+        MesosphereMetaInfo_IsKTraceEnabled     = 1,
+        MesosphereMetaInfo_IsSingleStepEnabled = 2,
     };
 
     enum SystemInfoType : u32 {
@@ -226,6 +263,7 @@ namespace ams::svc {
         ArbitrationType_WaitIfLessThan             = 0,
         ArbitrationType_DecrementAndWaitIfLessThan = 1,
         ArbitrationType_WaitIfEqual                = 2,
+        ArbitrationType_WaitIfEqual64              = 3,
     };
 
     enum YieldType : s64 {
@@ -242,7 +280,7 @@ namespace ams::svc {
     /* Thread types. */
     using ThreadFunc = ams::svc::Address;
 
-#if defined(ATMOSPHERE_ARCH_ARM64)
+#if defined(ATMOSPHERE_ARCH_ARM_V8A)
 
     struct ThreadContext {
         u64  r[29];
@@ -259,7 +297,7 @@ namespace ams::svc {
     };
     static_assert(sizeof(ThreadContext) == 0x320);
 
-#elif defined(ATMOSPHERE_ARCH_ARM)
+#elif defined(ATMOSPHERE_ARCH_ARM_V7A)
 
     struct ThreadContext {
         u32 r[13];
@@ -273,9 +311,14 @@ namespace ams::svc {
         u32 fpexc;
         u32 tpidr;
     };
+    static_assert(sizeof(ThreadContext) == 0x158);
 
 #else
+
+    #if !defined(ATMOSPHERE_IS_EXOSPHERE)
     #error "Unknown Architecture for ams::svc::ThreadContext"
+    #endif
+
 #endif
 
     enum ThreadSuspend : u32 {
@@ -297,6 +340,9 @@ namespace ams::svc {
         ThreadContextFlag_FpuControl = (1 << 3),
 
         ThreadContextFlag_All = (ThreadContextFlag_General | ThreadContextFlag_Control | ThreadContextFlag_Fpu | ThreadContextFlag_FpuControl),
+
+        ThreadContextFlag_SetSingleStep   = (1u << 30),
+        ThreadContextFlag_ClearSingleStep = (1u << 31),
     };
 
     enum ContinueFlag : u32 {
@@ -391,14 +437,22 @@ namespace ams::svc {
         /* 7.x+ Should memory allocation be optimized? This requires IsApplication. */
         CreateProcessFlag_OptimizeMemoryAllocation = (1 << 11),
 
+        /* 11.x+ DisableDeviceAddressSpaceMerge. */
+        CreateProcessFlag_DisableDeviceAddressSpaceMerge = (1 << 12),
+
+        /* 18.x EnableAliasRegionExtraSize. */
+        CreateProcessFlag_EnableAliasRegionExtraSize = (1 << 13),
+
         /* Mask of all flags. */
-        CreateProcessFlag_All = CreateProcessFlag_Is64Bit                  |
-                                CreateProcessFlag_AddressSpaceMask         |
-                                CreateProcessFlag_EnableDebug              |
-                                CreateProcessFlag_EnableAslr               |
-                                CreateProcessFlag_IsApplication            |
-                                CreateProcessFlag_PoolPartitionMask        |
-                                CreateProcessFlag_OptimizeMemoryAllocation,
+        CreateProcessFlag_All = CreateProcessFlag_Is64Bit                        |
+                                CreateProcessFlag_AddressSpaceMask               |
+                                CreateProcessFlag_EnableDebug                    |
+                                CreateProcessFlag_EnableAslr                     |
+                                CreateProcessFlag_IsApplication                  |
+                                CreateProcessFlag_PoolPartitionMask              |
+                                CreateProcessFlag_OptimizeMemoryAllocation       |
+                                CreateProcessFlag_DisableDeviceAddressSpaceMerge |
+                                CreateProcessFlag_EnableAliasRegionExtraSize,
     };
 
     /* Debug types. */
@@ -465,7 +519,17 @@ namespace ams::svc {
     };
 
     enum KernelDebugType : u32 {
-        /* TODO */
+        KernelDebugType_Thread          =  0,
+        KernelDebugType_ThreadCallStack =  1,
+        KernelDebugType_KernelObject    =  2,
+        KernelDebugType_Handle          =  3,
+        KernelDebugType_Memory          =  4,
+        KernelDebugType_PageTable       =  5,
+        KernelDebugType_CpuUtilization  =  6,
+        KernelDebugType_Process         =  7,
+        KernelDebugType_SuspendProcess  =  8,
+        KernelDebugType_ResumeProcess   =  9,
+        KernelDebugType_Port            = 10,
     };
 
     enum KernelTraceState : u32 {
@@ -537,7 +601,7 @@ namespace ams::svc {
             u64           padding[6];
         };
         static_assert(sizeof(ProcessLocalRegion) == 0x200);
-        static_assert(OFFSETOF(ProcessLocalRegion, dying_message_region_address) == 0x1C0);
+        static_assert(AMS_OFFSETOF(ProcessLocalRegion, dying_message_region_address) == 0x1C0);
 
     }
 
@@ -581,7 +645,7 @@ namespace ams::svc {
             u64           padding[6];
         };
         static_assert(sizeof(ProcessLocalRegion) == 0x200);
-        static_assert(OFFSETOF(ProcessLocalRegion, dying_message_region_address) == 0x1C0);
+        static_assert(AMS_OFFSETOF(ProcessLocalRegion, dying_message_region_address) == 0x1C0);
 
     }
 

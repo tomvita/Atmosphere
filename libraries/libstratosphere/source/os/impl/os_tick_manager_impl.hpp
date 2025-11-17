@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -16,8 +16,14 @@
 #pragma once
 #include <stratosphere.hpp>
 
-#ifdef ATMOSPHERE_OS_HORIZON
+#if defined(ATMOSPHERE_OS_HORIZON)
     #include "os_tick_manager_impl.os.horizon.hpp"
+#elif defined(ATMOSPHERE_OS_WINDOWS)
+    #include "os_tick_manager_impl.os.windows.hpp"
+#elif defined(ATMOSPHERE_OS_LINUX)
+    #include "os_tick_manager_impl.std_chrono.hpp"
+#elif defined(ATMOSPHERE_OS_MACOS)
+    #include "os_tick_manager_impl.std_chrono.hpp"
 #else
     #error "Unknown OS for TickManagerImpl"
 #endif
@@ -29,28 +35,32 @@ namespace ams::os::impl {
 
     class TickManager {
         private:
-            TickManagerImpl impl;
+            TickManagerImpl m_impl;
         public:
-            constexpr TickManager() : impl() { /* ... */ }
+            #if defined(ATMOSPHERE_OS_HORIZON)
+            constexpr TickManager() : m_impl() { /* ... */ }
+            #else
+            TickManager() : m_impl() { /* ... */ }
+            #endif
 
             ALWAYS_INLINE Tick GetTick() const {
-                return this->impl.GetTick();
+                return m_impl.GetTick();
             }
 
             ALWAYS_INLINE Tick GetSystemTickOrdered() const {
-                return this->impl.GetSystemTickOrdered();
+                return m_impl.GetSystemTickOrdered();
             }
 
             ALWAYS_INLINE s64 GetTickFrequency() const {
-                return this->impl.GetTickFrequency();
+                return m_impl.GetTickFrequency();
             }
 
             ALWAYS_INLINE s64 GetMaxTick() const {
-                return this->impl.GetMaxTick();
+                return m_impl.GetMaxTick();
             }
 
             ALWAYS_INLINE s64 GetMaxTimeSpanNs() const {
-                return this->impl.GetMaxTimeSpanNs();
+                return m_impl.GetMaxTimeSpanNs();
             }
 
             TimeSpan ConvertToTimeSpan(Tick tick) const;

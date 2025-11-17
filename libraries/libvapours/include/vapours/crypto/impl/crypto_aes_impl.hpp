@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -13,11 +13,11 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-
 #pragma once
 #include <vapours/common.hpp>
 #include <vapours/assert.hpp>
 #include <vapours/util.hpp>
+#include <vapours/crypto/impl/crypto_block_cipher.hpp>
 
 
 namespace ams::crypto::impl {
@@ -31,10 +31,10 @@ namespace ams::crypto::impl {
             static constexpr size_t RoundKeySize = BlockSize * (RoundCount + 1);
         private:
         #ifdef ATMOSPHERE_IS_EXOSPHERE
-            int slot;
+            int m_slot;
         #endif
         #ifdef ATMOSPHERE_IS_STRATOSPHERE
-            u32 round_keys[RoundKeySize / sizeof(u32)];
+            u32 m_round_keys[RoundKeySize / sizeof(u32)];
         #endif
         public:
             ~AesImpl();
@@ -45,11 +45,13 @@ namespace ams::crypto::impl {
 
         #ifdef ATMOSPHERE_IS_STRATOSPHERE
             const u8 *GetRoundKey() const {
-                return reinterpret_cast<const u8 *>(this->round_keys);
+                return reinterpret_cast<const u8 *>(m_round_keys);
             }
         #endif
     };
 
-    /* static_assert(HashFunction<Sha1Impl>); */
+    static_assert(BlockCipher<AesImpl<16>>);
+    static_assert(BlockCipher<AesImpl<24>>);
+    static_assert(BlockCipher<AesImpl<32>>);
 
 }

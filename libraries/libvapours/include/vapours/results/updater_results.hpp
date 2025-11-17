@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,9 +17,9 @@
 #pragma once
 #include <vapours/results/results_common.hpp>
 
-namespace ams::updater {
+R_DEFINE_NAMESPACE_RESULT_MODULE(ams::updater, 158);
 
-    R_DEFINE_NAMESPACE_RESULT_MODULE(158);
+namespace ams::updater {
 
     R_DEFINE_ERROR_RESULT(BootImagePackageNotFound, 2);
     R_DEFINE_ERROR_RESULT(InvalidBootImagePackage,  3);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -26,6 +26,9 @@ namespace ams::ncm {
             return { this->value };
         }
 
+        constexpr inline bool operator==(const ApplicationId &) const = default;
+        constexpr inline bool operator!=(const ApplicationId &) const = default;
+
         static const ApplicationId Start;
         static const ApplicationId End;
     };
@@ -39,7 +42,7 @@ namespace ams::ncm {
         return ApplicationId::Start <= program_id && program_id <= ApplicationId::End;
     }
 
-    inline constexpr bool IsApplicationId(const ApplicationId &id) {
+    inline constexpr bool IsApplicationId(const ApplicationId &) {
         return true;
     }
 
@@ -53,6 +56,9 @@ namespace ams::ncm {
         constexpr operator ProgramId() const {
             return { this->value };
         }
+
+        constexpr inline bool operator==(const PatchId &) const = default;
+        constexpr inline bool operator!=(const PatchId &) const = default;
     };
 
     struct PatchGroupId {
@@ -65,6 +71,9 @@ namespace ams::ncm {
         constexpr operator DataId() const {
             return { this->value };
         }
+
+        constexpr inline bool operator==(const AddOnContentId &) const = default;
+        constexpr inline bool operator!=(const AddOnContentId &) const = default;
     };
 
     struct DeltaId {
@@ -73,6 +82,20 @@ namespace ams::ncm {
         constexpr operator ProgramId() const {
             return { this->value };
         }
+
+        constexpr inline bool operator==(const DeltaId &) const = default;
+        constexpr inline bool operator!=(const DeltaId &) const = default;
+    };
+
+    struct DataPatchId {
+        u64 value;
+
+        constexpr operator DataId() const {
+            return { this->value };
+        }
+
+        constexpr inline bool operator==(const DataPatchId &) const = default;
+        constexpr inline bool operator!=(const DataPatchId &) const = default;
     };
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -16,23 +16,26 @@
 
 #pragma once
 #include "lr_location_resolver_impl_base.hpp"
+#include "lr_location_redirector.hpp"
 
 namespace ams::lr {
 
     class ContentLocationResolverImpl : public LocationResolverImplBase {
         private:
-            ncm::StorageId storage_id;
+            ncm::StorageId m_storage_id;
+            bool m_enabled;
 
             /* Objects for this storage type. */
-            ncm::ContentMetaDatabase content_meta_database;
-            ncm::ContentStorage content_storage;
+            ncm::ContentMetaDatabase m_content_meta_database;
+            ncm::ContentStorage m_content_storage;
         public:
-            ContentLocationResolverImpl(ncm::StorageId storage_id) : storage_id(storage_id) { /* ... */ }
+            ContentLocationResolverImpl(ncm::StorageId storage_id, bool enabled) : m_storage_id(storage_id), m_enabled(enabled), m_content_meta_database(), m_content_storage() { /* ... */ }
 
             ~ContentLocationResolverImpl();
         private:
             /* Helper functions. */
             void GetContentStoragePath(Path *out, ncm::ContentId content_id);
+            Result ResolveProgramPath(Path *out, RedirectionAttributes *out_attr, ncm::ProgramId id);
         public:
             /* Actual commands. */
             Result ResolveProgramPath(sf::Out<Path> out, ncm::ProgramId id);
@@ -61,6 +64,7 @@ namespace ams::lr {
             Result RedirectApplicationProgramPathForDebugDeprecated(const Path &path, ncm::ProgramId id);
             Result RedirectApplicationProgramPathForDebug(const Path &path, ncm::ProgramId id, ncm::ProgramId owner_id);
             Result EraseProgramRedirectionForDebug(ncm::ProgramId id);
+            Result Disable();
     };
     static_assert(lr::IsILocationResolver<ContentLocationResolverImpl>);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,7 +18,8 @@
 
 namespace ams::fssystem {
 
-    template<bool ContinuousCheck, typename F>
+    /* ACCURATE_TO_VERSION: 13.4.0.0 */
+    template<bool ContinuousCheck, bool RangeCheck, typename F>
     Result IndirectStorage::OperatePerEntry(s64 offset, s64 size, F func) {
         /* Validate preconditions. */
         AMS_ASSERT(offset >= 0);
@@ -28,15 +29,19 @@ namespace ams::fssystem {
         /* Succeed if there's nothing to operate on. */
         R_SUCCEED_IF(size == 0);
 
+        /* Get the table offsets. */
+        BucketTree::Offsets table_offsets;
+        R_TRY(m_table.GetOffsets(std::addressof(table_offsets)));
+
         /* Validate arguments. */
-        R_UNLESS(this->table.Includes(offset, size), fs::ResultOutOfRange());
+        R_UNLESS(table_offsets.IsInclude(offset, size), fs::ResultOutOfRange());
 
         /* Find the offset in our tree. */
         BucketTree::Visitor visitor;
-        R_TRY(this->table.Find(std::addressof(visitor), offset));
+        R_TRY(m_table.Find(std::addressof(visitor), offset));
         {
             const auto entry_offset = visitor.Get<Entry>()->GetVirtualOffset();
-            R_UNLESS(0 <= entry_offset && this->table.Includes(entry_offset), fs::ResultInvalidIndirectEntryOffset());
+            R_UNLESS(0 <= entry_offset && table_offsets.IsInclude(entry_offset), fs::ResultInvalidIndirectEntryOffset());
         }
 
         /* Prepare to operate in chunks. */
@@ -67,19 +72,24 @@ namespace ams::fssystem {
                     /* Ensure that we can process. */
                     R_UNLESS(cur_entry.storage_index == 0, fs::ResultInvalidIndirectEntryStorageIndex());
 
-                    /* Get the current data storage's size. */
-                    s64 cur_data_storage_size;
-                    R_TRY(this->data_storage[0].GetSize(std::addressof(cur_data_storage_size)));
 
                     /* Ensure that we remain within range. */
                     const auto data_offset           = cur_offset - cur_entry_offset;
                     const auto cur_entry_phys_offset = cur_entry.GetPhysicalOffset();
                     const auto cur_size              = static_cast<s64>(cr_info.GetReadSize());
-                    R_UNLESS(0 <= cur_entry_phys_offset && cur_entry_phys_offset <= cur_data_storage_size, fs::ResultInvalidIndirectEntryOffset());
-                    R_UNLESS(cur_entry_phys_offset + data_offset + cur_size <= cur_data_storage_size,      fs::ResultInvalidIndirectStorageSize());
+
+                    /* If we should, verify the range. */
+                    if constexpr (RangeCheck) {
+                        /* Get the current data storage's size. */
+                        s64 cur_data_storage_size;
+                        R_TRY(m_data_storage[0].GetSize(std::addressof(cur_data_storage_size)));
+
+                        R_UNLESS(0 <= cur_entry_phys_offset && cur_entry_phys_offset <= cur_data_storage_size, fs::ResultInvalidIndirectEntryOffset());
+                        R_UNLESS(cur_entry_phys_offset + data_offset + cur_size <= cur_data_storage_size,      fs::ResultInvalidIndirectStorageSize());
+                    }
 
                     /* Operate. */
-                    R_TRY(func(std::addressof(this->data_storage[0]), cur_entry_phys_offset + data_offset, cur_offset, cur_size));
+                    R_TRY(func(std::addressof(m_data_storage[0]), cur_entry_phys_offset + data_offset, cur_offset, cur_size));
 
                     /* Mark as done. */
                     cr_info.Done();
@@ -91,20 +101,20 @@ namespace ams::fssystem {
             if (visitor.CanMoveNext()) {
                 R_TRY(visitor.MoveNext());
                 next_entry_offset = visitor.Get<Entry>()->GetVirtualOffset();
-                R_UNLESS(this->table.Includes(next_entry_offset), fs::ResultInvalidIndirectEntryOffset());
+                R_UNLESS(table_offsets.IsInclude(next_entry_offset), fs::ResultInvalidIndirectEntryOffset());
             } else {
-                next_entry_offset = this->table.GetEnd();
+                next_entry_offset = table_offsets.end_offset;
             }
             R_UNLESS(cur_offset < next_entry_offset, fs::ResultInvalidIndirectEntryOffset());
 
             /* Get the offset of the entry in the data we read. */
             const auto data_offset = cur_offset - cur_entry_offset;
-            const auto data_size   = (next_entry_offset - cur_entry_offset) - data_offset;
+            const auto data_size   = (next_entry_offset - cur_entry_offset);
             AMS_ASSERT(data_size > 0);
 
             /* Determine how much is left. */
             const auto remaining_size = end_offset - cur_offset;
-            const auto cur_size       = std::min(remaining_size, data_size);
+            const auto cur_size       = std::min<s64>(remaining_size, data_size - data_offset);
             AMS_ASSERT(cur_size <= size);
 
             /* Operate, if we need to. */
@@ -116,22 +126,25 @@ namespace ams::fssystem {
             }
 
             if (needs_operate) {
-                /* Get the current data storage's size. */
-                s64 cur_data_storage_size;
-                R_TRY(this->data_storage[cur_entry.storage_index].GetSize(std::addressof(cur_data_storage_size)));
-
-                /* Ensure that we remain within range. */
                 const auto cur_entry_phys_offset = cur_entry.GetPhysicalOffset();
-                R_UNLESS(0 <= cur_entry_phys_offset && cur_entry_phys_offset <= cur_data_storage_size, fs::ResultIndirectStorageCorrupted());
-                R_UNLESS(cur_entry_phys_offset + data_offset + cur_size <= cur_data_storage_size,      fs::ResultIndirectStorageCorrupted());
 
-                R_TRY(func(std::addressof(this->data_storage[cur_entry.storage_index]), cur_entry_phys_offset + data_offset, cur_offset, cur_size));
+                if constexpr (RangeCheck) {
+                    /* Get the current data storage's size. */
+                    s64 cur_data_storage_size;
+                    R_TRY(m_data_storage[cur_entry.storage_index].GetSize(std::addressof(cur_data_storage_size)));
+
+                    /* Ensure that we remain within range. */
+                    R_UNLESS(0 <= cur_entry_phys_offset && cur_entry_phys_offset <= cur_data_storage_size, fs::ResultIndirectStorageCorrupted());
+                    R_UNLESS(cur_entry_phys_offset + data_offset + cur_size <= cur_data_storage_size,      fs::ResultIndirectStorageCorrupted());
+                }
+
+                R_TRY(func(std::addressof(m_data_storage[cur_entry.storage_index]), cur_entry_phys_offset + data_offset, cur_offset, cur_size));
             }
 
             cur_offset += cur_size;
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
 }

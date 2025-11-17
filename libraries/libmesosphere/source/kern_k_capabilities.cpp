@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,35 +19,53 @@ namespace ams::kern {
 
     Result KCapabilities::Initialize(const u32 *caps, s32 num_caps, KProcessPageTable *page_table) {
         /* We're initializing an initial process. */
-        /* Most fields have already been cleared by our constructor. */
+        m_svc_access_flags.Reset();
+        m_irq_access_flags.Reset();
+        m_debug_capabilities      = {0};
+        m_handle_table_size       = 0;
+        m_intended_kernel_version = {0};
+        m_program_type            = 0;
 
         /* Initial processes may run on all cores. */
-        this->core_mask = (1ul << cpu::NumCores) - 1;
+        constexpr u64 VirtMask = cpu::VirtualCoreMask;
+        constexpr u64 PhysMask = cpu::ConvertVirtualCoreMaskToPhysical(VirtMask);
+
+        m_core_mask      = VirtMask;
+        m_phys_core_mask = PhysMask;
 
         /* Initial processes may use any user priority they like. */
-        this->priority_mask = ~0xFul;
+        m_priority_mask = ~0xFul;
 
         /* Here, Nintendo sets the kernel version to the current kernel version. */
         /* We will follow suit and set the version to the highest supported kernel version. */
-        this->intended_kernel_version.Set<KernelVersion::MajorVersion>(ams::svc::SupportedKernelMajorVersion);
-        this->intended_kernel_version.Set<KernelVersion::MinorVersion>(ams::svc::SupportedKernelMinorVersion);
+        m_intended_kernel_version.Set<KernelVersion::MajorVersion>(ams::svc::SupportedKernelMajorVersion);
+        m_intended_kernel_version.Set<KernelVersion::MinorVersion>(ams::svc::SupportedKernelMinorVersion);
 
         /* Parse the capabilities array. */
-        return this->SetCapabilities(caps, num_caps, page_table);
+        R_RETURN(this->SetCapabilities(caps, num_caps, page_table));
     }
 
      Result KCapabilities::Initialize(svc::KUserPointer<const u32 *> user_caps, s32 num_caps, KProcessPageTable *page_table) {
         /* We're initializing a user process. */
-        /* Most fields have already been cleared by our constructor. */
+        m_svc_access_flags.Reset();
+        m_irq_access_flags.Reset();
+        m_debug_capabilities      = {0};
+        m_handle_table_size       = 0;
+        m_intended_kernel_version = {0};
+        m_program_type            = 0;
+
+        /* User processes must specify what cores/priorities they can use. */
+        m_core_mask     = 0;
+        m_priority_mask = 0;
 
         /* Parse the user capabilities array. */
-        return this->SetCapabilities(user_caps, num_caps, page_table);
+        R_RETURN(this->SetCapabilities(user_caps, num_caps, page_table));
      }
 
     Result KCapabilities::SetCorePriorityCapability(const util::BitPack32 cap) {
         /* We can't set core/priority if we've already set them. */
-        R_UNLESS(this->core_mask    == 0,  svc::ResultInvalidArgument());
-        R_UNLESS(this->priority_mask == 0, svc::ResultInvalidArgument());
+        R_UNLESS(m_core_mask     == 0, svc::ResultInvalidArgument());
+        R_UNLESS(m_priority_mask == 0, svc::ResultInvalidArgument());
 
         /* Validate the core/priority. */
         const auto min_core = cap.Get<CorePriority::MinimumCoreId>();
@@ -55,29 +73,34 @@ namespace ams::kern {
         const auto max_prio  = cap.Get<CorePriority::LowestThreadPriority>();
         const auto min_prio  = cap.Get<CorePriority::HighestThreadPriority>();
 
-        R_UNLESS(min_core <= max_core,       svc::ResultInvalidCombination());
-        R_UNLESS(min_prio <= max_prio,       svc::ResultInvalidCombination());
-        R_UNLESS(max_core <  cpu::NumCores,  svc::ResultInvalidCoreId());
+        R_UNLESS(min_core <= max_core,             svc::ResultInvalidCombination());
+        R_UNLESS(min_prio <= max_prio,             svc::ResultInvalidCombination());
+        R_UNLESS(max_core <  cpu::NumVirtualCores, svc::ResultInvalidCoreId());
 
-        MESOSPHERE_ASSERT(max_core < BITSIZEOF(u64));
         MESOSPHERE_ASSERT(max_prio < BITSIZEOF(u64));
 
         /* Set core mask. */
         for (auto core_id = min_core; core_id <= max_core; core_id++) {
-            this->core_mask |= (1ul << core_id);
+            m_core_mask |= (1ul << core_id);
         }
-        MESOSPHERE_ASSERT((this->core_mask & ((1ul << cpu::NumCores) - 1)) == this->core_mask);
+        MESOSPHERE_ASSERT((m_core_mask & cpu::VirtualCoreMask) == m_core_mask);
+
+        /* Set physical core mask. */
+        m_phys_core_mask = cpu::ConvertVirtualCoreMaskToPhysical(m_core_mask);
 
         /* Set priority mask. */
         for (auto prio = min_prio; prio <= max_prio; prio++) {
-            this->priority_mask |= (1ul << prio);
+            m_priority_mask |= (1ul << prio);
         }
 
         /* We must have some core/priority we can use. */
-        R_UNLESS(this->core_mask     != 0, svc::ResultInvalidArgument());
-        R_UNLESS(this->priority_mask != 0, svc::ResultInvalidArgument());
+        R_UNLESS(m_core_mask     != 0, svc::ResultInvalidArgument());
+        R_UNLESS(m_priority_mask != 0, svc::ResultInvalidArgument());
 
-        return ResultSuccess();
+        /* Processes must not have access to kernel thread priorities. */
+        R_UNLESS((m_priority_mask & 0xF) == 0, svc::ResultInvalidArgument());
+
+        R_SUCCEED();
     }
 
     Result KCapabilities::SetSyscallMaskCapability(const util::BitPack32 cap, u32 &set_svc) {
@@ -97,15 +120,19 @@ namespace ams::kern {
             }
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result KCapabilities::MapRange(const util::BitPack32 cap, const util::BitPack32 size_cap, KProcessPageTable *page_table) {
+        /* Get/validate address/size */
+        #if defined(MESOSPHERE_ENABLE_LARGE_PHYSICAL_ADDRESS_CAPABILITIES)
+        const u64 phys_addr    = static_cast<u64>(cap.Get<MapRange::Address>() | (size_cap.Get<MapRangeSize::AddressHigh>() << MapRange::Address::Count)) * PageSize;
+        #else
+        const u64 phys_addr    = static_cast<u64>(cap.Get<MapRange::Address>()) * PageSize;
+
         /* Validate reserved bits are unused. */
         R_UNLESS(size_cap.Get<MapRangeSize::Reserved>() == 0, svc::ResultOutOfRange());
-
-        /* Get/validate address/size */
-        const u64 phys_addr    = cap.Get<MapRange::Address>() * PageSize;
+        #endif
         const size_t num_pages = size_cap.Get<MapRangeSize::Pages>();
         const size_t size      = num_pages * PageSize;
         R_UNLESS(phys_addr == GetInteger(KPhysicalAddress(phys_addr)),    svc::ResultInvalidAddress());
@@ -116,9 +143,9 @@ namespace ams::kern {
         /* Do the mapping. */
         const KMemoryPermission perm = cap.Get<MapRange::ReadOnly>() ? KMemoryPermission_UserRead : KMemoryPermission_UserReadWrite;
         if (size_cap.Get<MapRangeSize::Normal>()) {
-            return page_table->MapStatic(phys_addr, size, perm);
+            R_RETURN(page_table->MapStatic(phys_addr, size, perm));
         } else {
-            return page_table->MapIo(phys_addr, size, perm);
+            R_RETURN(page_table->MapIo(phys_addr, size, perm));
         }
     }
 
@@ -133,12 +160,13 @@ namespace ams::kern {
         R_UNLESS(((phys_addr + size - 1) & ~PhysicalMapAllowedMask) == 0, svc::ResultInvalidAddress());
 
         /* Do the mapping. */
-        return page_table->MapIo(phys_addr, size, KMemoryPermission_UserReadWrite);
+        R_RETURN(page_table->MapIo(phys_addr, size, KMemoryPermission_UserReadWrite));
     }
 
-    Result KCapabilities::MapRegion(const util::BitPack32 cap, KProcessPageTable *page_table) {
+    template<typename F>
+    ALWAYS_INLINE Result KCapabilities::ProcessMapRegionCapability(const util::BitPack32 cap, F f) {
         /* Define the allowed memory regions. */
-        constexpr KMemoryRegionType MemoryRegions[] = {
+        constexpr const KMemoryRegionType MemoryRegions[] = {
             KMemoryRegionType_None,
             KMemoryRegionType_KernelTraceBuffer,
             KMemoryRegionType_OnMemoryBootImage,
@@ -153,19 +181,40 @@ namespace ams::kern {
             const auto type = types[i];
             const auto perm = ro[i] ? KMemoryPermission_UserRead : KMemoryPermission_UserReadWrite;
             switch (type) {
-                case RegionType::None:
+                case RegionType::NoMapping:
                     break;
                 case RegionType::KernelTraceBuffer:
+                    /* NOTE: This does not match official, but is used to make pre-processing hbl capabilities in userland unnecessary. */
+                    /* If ktrace isn't enabled, allow ktrace to succeed without mapping anything. */
+                    if constexpr (!ams::kern::IsKTraceEnabled) {
+                        break;
+                    }
                 case RegionType::OnMemoryBootImage:
                 case RegionType::DTB:
-                    R_TRY(page_table->MapRegion(MemoryRegions[static_cast<u32>(type)], perm));
+                    R_TRY(f(MemoryRegions[static_cast<u32>(type)], perm));
                     break;
                 default:
-                    return svc::ResultNotFound();
+                    R_THROW(svc::ResultNotFound());
             }
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
+    }
+
+    Result KCapabilities::MapRegion(const util::BitPack32 cap, KProcessPageTable *page_table) {
+        /* Map each region into the process's page table. */
+        R_RETURN(ProcessMapRegionCapability(cap, [page_table] ALWAYS_INLINE_LAMBDA (KMemoryRegionType region_type, KMemoryPermission perm) -> Result {
+            R_RETURN(page_table->MapRegion(region_type, perm));
+        }));
+    }
+
+    Result KCapabilities::CheckMapRegion(const util::BitPack32 cap) {
+        /* Check that each region has a physical backing store. */
+        R_RETURN(ProcessMapRegionCapability(cap, [] ALWAYS_INLINE_LAMBDA (KMemoryRegionType region_type, KMemoryPermission perm) -> Result {
+            MESOSPHERE_UNUSED(perm);
+            R_UNLESS(KMemoryLayout::GetPhysicalMemoryRegionTree().FindFirstDerived(region_type) != nullptr, svc::ResultOutOfRange());
+            R_SUCCEED();
+        }));
     }
 
     Result KCapabilities::SetInterruptPairCapability(const util::BitPack32 cap) {
@@ -179,43 +228,50 @@ namespace ams::kern {
             }
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result KCapabilities::SetProgramTypeCapability(const util::BitPack32 cap) {
         /* Validate. */
         R_UNLESS(cap.Get<ProgramType::Reserved>() == 0, svc::ResultReservedUsed());
 
-        this->program_type = cap.Get<ProgramType::Type>();
-        return ResultSuccess();
+        m_program_type = cap.Get<ProgramType::Type>();
+        R_SUCCEED();
     }
 
     Result KCapabilities::SetKernelVersionCapability(const util::BitPack32 cap) {
         /* Ensure we haven't set our version before. */
-        R_UNLESS(this->intended_kernel_version.Get<KernelVersion::MajorVersion>() == 0, svc::ResultInvalidArgument());
+        R_UNLESS(m_intended_kernel_version.Get<KernelVersion::MajorVersion>() == 0, svc::ResultInvalidArgument());
 
         /* Set, ensure that we set a valid version. */
-        this->intended_kernel_version = cap;
-        R_UNLESS(this->intended_kernel_version.Get<KernelVersion::MajorVersion>() != 0, svc::ResultInvalidArgument());
+        m_intended_kernel_version = cap;
+        R_UNLESS(m_intended_kernel_version.Get<KernelVersion::MajorVersion>() != 0, svc::ResultInvalidArgument());
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result KCapabilities::SetHandleTableCapability(const util::BitPack32 cap) {
         /* Validate. */
         R_UNLESS(cap.Get<HandleTable::Reserved>() == 0, svc::ResultReservedUsed());
 
-        this->handle_table_size = cap.Get<HandleTable::Size>();
-        return ResultSuccess();
+        m_handle_table_size = cap.Get<HandleTable::Size>();
+        R_SUCCEED();
     }
 
     Result KCapabilities::SetDebugFlagsCapability(const util::BitPack32 cap) {
         /* Validate. */
         R_UNLESS(cap.Get<DebugFlags::Reserved>() == 0, svc::ResultReservedUsed());
 
-        this->debug_capabilities.Set<DebugFlags::AllowDebug>(cap.Get<DebugFlags::AllowDebug>());
-        this->debug_capabilities.Set<DebugFlags::ForceDebug>(cap.Get<DebugFlags::ForceDebug>());
-        return ResultSuccess();
+        u32 total = 0;
+        if (cap.Get<DebugFlags::AllowDebug>()) { ++total; }
+        if (cap.Get<DebugFlags::ForceDebugProd>()) { ++total; }
+        if (cap.Get<DebugFlags::ForceDebug>()) { ++total; }
+        R_UNLESS(total <= 1, svc::ResultInvalidCombination());
+
+        m_debug_capabilities.Set<DebugFlags::AllowDebug>(cap.Get<DebugFlags::AllowDebug>());
+        m_debug_capabilities.Set<DebugFlags::ForceDebugProd>(cap.Get<DebugFlags::ForceDebugProd>());
+        m_debug_capabilities.Set<DebugFlags::ForceDebug>(cap.Get<DebugFlags::ForceDebug>());
+        R_SUCCEED();
     }
 
     Result KCapabilities::SetCapability(const util::BitPack32 cap, u32 &set_flags, u32 &set_svc, KProcessPageTable *page_table) {
@@ -233,16 +289,16 @@ namespace ams::kern {
 
         /* Process the capability. */
         switch (type) {
-            case CapabilityType::CorePriority:  return this->SetCorePriorityCapability(cap);
-            case CapabilityType::SyscallMask:   return this->SetSyscallMaskCapability(cap, set_svc);
-            case CapabilityType::MapIoPage:     return this->MapIoPage(cap, page_table);
-            case CapabilityType::MapRegion:     return this->MapRegion(cap, page_table);
-            case CapabilityType::InterruptPair: return this->SetInterruptPairCapability(cap);
-            case CapabilityType::ProgramType:   return this->SetProgramTypeCapability(cap);
-            case CapabilityType::KernelVersion: return this->SetKernelVersionCapability(cap);
-            case CapabilityType::HandleTable:   return this->SetHandleTableCapability(cap);
-            case CapabilityType::DebugFlags:    return this->SetDebugFlagsCapability(cap);
-            default:                            return svc::ResultInvalidArgument();
+            case CapabilityType::CorePriority:  R_RETURN(this->SetCorePriorityCapability(cap));
+            case CapabilityType::SyscallMask:   R_RETURN(this->SetSyscallMaskCapability(cap, set_svc));
+            case CapabilityType::MapIoPage:     R_RETURN(this->MapIoPage(cap, page_table));
+            case CapabilityType::MapRegion:     R_RETURN(this->MapRegion(cap, page_table));
+            case CapabilityType::InterruptPair: R_RETURN(this->SetInterruptPairCapability(cap));
+            case CapabilityType::ProgramType:   R_RETURN(this->SetProgramTypeCapability(cap));
+            case CapabilityType::KernelVersion: R_RETURN(this->SetKernelVersionCapability(cap));
+            case CapabilityType::HandleTable:   R_RETURN(this->SetHandleTableCapability(cap));
+            case CapabilityType::DebugFlags:    R_RETURN(this->SetDebugFlagsCapability(cap));
+            default:                            R_THROW(svc::ResultInvalidArgument());
         }
     }
 
@@ -266,7 +322,7 @@ namespace ams::kern {
             }
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result KCapabilities::SetCapabilities(svc::KUserPointer<const u32 *> user_caps, s32 num_caps, KProcessPageTable *page_table) {
@@ -297,7 +353,24 @@ namespace ams::kern {
             }
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
+    }
+
+    Result KCapabilities::CheckCapabilities(svc::KUserPointer<const u32 *> user_caps, s32 num_caps) {
+        for (s32 i = 0; i < num_caps; ++i) {
+            /* Read the cap from userspace. */
+            u32 cap0;
+            R_TRY(user_caps.CopyArrayElementTo(std::addressof(cap0), i));
+
+            /* Check the capability refers to a valid region. */
+
+            const util::BitPack32 cap = { cap0 };
+            if (GetCapabilityType(cap) == CapabilityType::MapRegion) {
+                R_TRY(CheckMapRegion(cap));
+            }
+        }
+
+        R_SUCCEED();
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -25,16 +25,15 @@ namespace ams::kern {
             static constexpr s32 ExitWorkerPriority = 11;
 
             enum WorkerType {
-                WorkerType_Exit,
+                WorkerType_ExitThread,
+                WorkerType_ExitProcess,
 
                 WorkerType_Count,
             };
         private:
-            KWorkerTask *head_task;
-            KWorkerTask *tail_task;
-            KThread *thread;
-            WorkerType type;
-            bool active;
+            KWorkerTask *m_head_task;
+            KWorkerTask *m_tail_task;
+            KThread *m_waiting_thread;
         private:
             static void ThreadFunction(uintptr_t arg);
             void ThreadFunctionImpl();
@@ -42,9 +41,9 @@ namespace ams::kern {
             KWorkerTask *GetTask();
             void AddTask(KWorkerTask *task);
         public:
-            constexpr KWorkerTaskManager() : head_task(), tail_task(), thread(), type(WorkerType_Count), active() { /* ... */ }
+            constexpr KWorkerTaskManager() : m_head_task(), m_tail_task(), m_waiting_thread() { /* ... */ }
 
-            NOINLINE void Initialize(WorkerType wt, s32 priority);
+            NOINLINE void Initialize(s32 priority);
             static void AddTask(WorkerType type, KWorkerTask *task);
     };
 

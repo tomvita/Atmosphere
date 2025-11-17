@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -89,7 +89,8 @@ _main:
     bl _ZN3ams4kern4init3Elf18CallInitArrayFuncsEmm
 
     /* Setup system registers, for detection of errors during init later. */
-    msr tpidr_el1, xzr /* Clear TPIDR_EL1 */
+    msr tpidr_el1, xzr
+    msr cntv_cval_el0, xzr
     adr x0, __external_references
     adr x1, _start
     ldr x0, [x0,  #0x30]
@@ -109,19 +110,35 @@ _main:
     str x0, [sp, #0x20]
 
 
-    /* Call ams::kern::init::loader::GetFinalPageAllocatorState() */
-    bl _ZN3ams4kern4init6loader26GetFinalPageAllocatorStateEv
+    /* Call ams::kern::init::loader::GetFinalState() */
+    bl _ZN3ams4kern4init6loader13GetFinalStateEv
 
-    /* X0 is now the saved state for the page allocator. */
+    /* X0 is now the saved state. */
     /* We will return this to the kernel. */
 
-    /* Return to the newly-relocated kernel. */
+    /* Adjust return address to point to the relocated kernel. */
     ldr x1, [sp, #0x18] /* Return address to Kernel */
     ldr x2, [sp, #0x00] /* Relocated kernel base address diff. */
     add x1, x2, x1
+
+    /* Translate the relocated address back to a physical address. */
+    and x4, x1, #0xFFF
+    sub x3, x1, x4
+    at  s1e1r, x3
+    isb
+    mrs x3, par_el1
+1:
+    tbnz w3, #0, 1b
+    and x3, x3, #0xFFFFFFFFF000
+    add x3, x3, x4
+
+    /* Return the difference between relocated and physical in x1. */
+    sub x1, x1, x3
+
+    /* Setup stack, and return to the kernel. */
     ldr x2, [sp, #0x20]
     mov sp, x2
-    br  x1
+    br  x3
 
 #ifdef ATMOSPHERE_BOARD_NINTENDO_NX
 .global     _ZN3ams4kern17GetTargetFirmwareEv

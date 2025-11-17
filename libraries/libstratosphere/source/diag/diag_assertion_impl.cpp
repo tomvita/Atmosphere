@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -14,18 +14,15 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <stratosphere.hpp>
-
-namespace ams {
-
-    extern ncm::ProgramId CurrentProgramId;
-
-}
+#include "impl/diag_get_all_backtrace.hpp"
+#include "impl/diag_invoke_abort.hpp"
 
 namespace ams::diag {
 
     namespace {
 
         inline NORETURN void AbortWithValue(u64 debug) {
+            #if defined(ATMOSPHERE_BOARD_NINTENDO_NX)
             /* Just perform a data abort. */
             register u64 addr __asm__("x27") = FatalErrorContext::StdAbortMagicAddress;
             register u64 val __asm__("x28")  = FatalErrorContext::StdAbortMagicValue;
@@ -38,102 +35,203 @@ namespace ams::diag {
                     : "x0"
                 );
             }
+            #else
+            AMS_UNUSED(debug);
+            std::abort();
+            #endif
             __builtin_unreachable();
         }
 
-        inline void DebugLog(const char *format, ...) __attribute__((format(printf, 1, 2)));
+        constinit os::SdkMutex g_assert_mutex;
+        constinit os::SdkMutex g_abort_mutex;
 
-#ifdef AMS_ENABLE_DEBUG_PRINT
-        os::Mutex g_debug_log_lock(true);
-        char g_debug_buffer[0x400];
+        void PrepareAbort() {
+            #if defined(ATMOSPHERE_OS_HORIZON)
+            {
+                /* Get the thread local region. */
+                auto * const tlr = svc::GetThreadLocalRegion();
 
-        void DebugLogImpl(const char *format, ::std::va_list vl) {
-            std::scoped_lock lk(g_debug_log_lock);
+                /* Clear disable count. */
+                tlr->disable_count = 0;
 
-            std::vsnprintf(g_debug_buffer, sizeof(g_debug_buffer), format, vl);
-
-            svc::OutputDebugString(g_debug_buffer, strlen(g_debug_buffer));
+                /* If we need to, unpin. */
+                if (tlr->interrupt_flag) {
+                    svc::SynchronizePreemptionState();
+                }
+            }
+            #endif
         }
 
-        void DebugLog(const char *format, ...) {
-            ::std::va_list vl;
-            va_start(vl, format);
-            DebugLogImpl(format, vl);
-            va_end(vl);
+        AbortReason ToAbortReason(AssertionType type) {
+            switch (type) {
+                case AssertionType_Audit:  return AbortReason_Audit;
+                case AssertionType_Assert: return AbortReason_Assert;
+                default:
+                    return AbortReason_Abort;
+            }
         }
 
-#else
-        void DebugLog(const char *format, ...)  { /* ... */ }
-#endif
-
-    }
-
-    NORETURN WEAK_SYMBOL void AssertionFailureImpl(const char *file, int line, const char *func, const char *expr, u64 value, const char *format, ...) {
-        DebugLog("%016lx: Assertion Failure\n", static_cast<u64>(ams::CurrentProgramId));
-        DebugLog("        Location:   %s:%d\n", file, line);
-        DebugLog("        Function:   %s\n", func);
-        DebugLog("        Expression: %s\n", expr);
-        DebugLog("        Value:      %016lx\n", value);
-        DebugLog("\n");
-#ifdef AMS_ENABLE_DEBUG_PRINT
-        {
-            ::std::va_list vl;
-            va_start(vl, format);
-            DebugLogImpl(format, vl);
-            va_end(vl);
+        AssertionFailureOperation DefaultAssertionFailureHandler(const AssertionInfo &) {
+            return AssertionFailureOperation_Abort;
         }
-#endif
-        DebugLog("\n");
 
-        AbortWithValue(value);
-    }
+        constinit AssertionFailureHandler g_assertion_failure_handler = &DefaultAssertionFailureHandler;
 
-    NORETURN WEAK_SYMBOL void AssertionFailureImpl(const char *file, int line, const char *func, const char *expr, u64 value) {
-        DebugLog("%016lx: Assertion Failure\n", static_cast<u64>(ams::CurrentProgramId));
-        DebugLog("        Location:   %s:%d\n", file, line);
-        DebugLog("        Function:   %s\n", func);
-        DebugLog("        Expression: %s\n", expr);
-        DebugLog("        Value:      %016lx\n", value);
-        DebugLog("\n");
-        DebugLog("\n");
+        void ExecuteAssertionFailureOperation(AssertionFailureOperation operation, const AssertionInfo &info)  {
+            switch (operation) {
+                case AssertionFailureOperation_Continue:
+                    break;
+                case AssertionFailureOperation_Abort:
+                    {
+                        const AbortInfo abort_info = {
+                            ToAbortReason(info.type),
+                            info.message,
+                            info.expr,
+                            info.func,
+                            info.file,
+                            info.line,
+                        };
 
-        AbortWithValue(value);
-    }
-
-    NORETURN WEAK_SYMBOL void AbortImpl(const char *file, int line, const char *func, const char *expr, u64 value, const char *format, ...) {
-        DebugLog("%016lx: Abort Called\n", static_cast<u64>(ams::CurrentProgramId));
-        DebugLog("        Location:   %s:%d\n", file, line);
-        DebugLog("        Function:   %s\n", func);
-        DebugLog("        Expression: %s\n", expr);
-        DebugLog("        Value:      %016lx\n", value);
-        DebugLog("\n");
-#ifdef AMS_ENABLE_DEBUG_PRINT
-        {
-            ::std::va_list vl;
-            va_start(vl, format);
-            DebugLogImpl(format, vl);
-            va_end(vl);
+                        ::ams::diag::impl::InvokeAbortObserver(abort_info);
+                        AbortWithValue(0);
+                    }
+                    break;
+                AMS_UNREACHABLE_DEFAULT_CASE();
+            }
         }
-#endif
-        DebugLog("\n");
 
-        AbortWithValue(value);
+        void InvokeAssertionFailureHandler(const AssertionInfo &info) {
+            const auto operation = g_assertion_failure_handler(info);
+            ExecuteAssertionFailureOperation(operation, info);
+        }
+
+
     }
 
-    NORETURN WEAK_SYMBOL void AbortImpl(const char *file, int line, const char *func, const char *expr, u64 value) {
-        DebugLog("%016lx: Abort Called\n", static_cast<u64>(ams::CurrentProgramId));
-        DebugLog("        Location:   %s:%d\n", file, line);
-        DebugLog("        Function:   %s\n", func);
-        DebugLog("        Expression: %s\n", expr);
-        DebugLog("        Value:      %016lx\n", value);
-        DebugLog("\n");
-        DebugLog("\n");
+    NOINLINE void OnAssertionFailure(AssertionType type, const char *expr, const char *func, const char *file, int line, const char *format, ...) {
+        /* Prepare to abort. */
+        PrepareAbort();
 
-        AbortWithValue(value);
+        /* Acquire exclusive assert rights. */
+        if (g_assert_mutex.IsLockedByCurrentThread()) {
+            AbortWithValue(0);
+        }
+
+        std::scoped_lock lk(g_assert_mutex);
+
+        /* Create the assertion info. */
+        std::va_list vl;
+        va_start(vl, format);
+
+        const ::ams::diag::LogMessage message = { format, std::addressof(vl) };
+
+        const AssertionInfo info = {
+            type,
+            std::addressof(message),
+            expr,
+            func,
+            file,
+            line,
+        };
+
+        InvokeAssertionFailureHandler(info);
+        va_end(vl);
     }
 
-    NORETURN WEAK_SYMBOL void AbortImpl() {
-        AbortWithValue(0);
+    void OnAssertionFailure(AssertionType type, const char *expr, const char *func, const char *file, int line) {
+        return OnAssertionFailure(type, expr, func, file, line, "");
+    }
+
+    NORETURN void AbortImpl(const char *expr, const char *func, const char *file, int line) {
+        const Result res = ResultSuccess();
+
+        std::va_list vl{};
+        VAbortImpl(expr, func, file, line, std::addressof(res), nullptr, "", vl);
+    }
+
+    NORETURN void AbortImpl(const char *expr, const char *func, const char *file, int line, const char *fmt, ...) {
+        const Result res = ResultSuccess();
+
+        std::va_list vl;
+        va_start(vl, fmt);
+        VAbortImpl(expr, func, file, line, std::addressof(res), nullptr, fmt, vl);
+    }
+
+    NORETURN void AbortImpl(const char *expr, const char *func, const char *file, int line, const ::ams::Result *result, const char *fmt, ...) {
+        std::va_list vl;
+        va_start(vl, fmt);
+        VAbortImpl(expr, func, file, line, result, nullptr, fmt, vl);
+    }
+
+    NORETURN void AbortImpl(const char *expr, const char *func, const char *file, int line, const ::ams::Result *result, const ::ams::os::UserExceptionInfo *exc_info, const char *fmt, ...) {
+        std::va_list vl;
+        va_start(vl, fmt);
+        VAbortImpl(expr, func, file, line, result, exc_info, fmt, vl);
+    }
+
+    NORETURN NOINLINE void VAbortImpl(const char *expr, const char *func, const char *file, int line, const ::ams::Result *result, const ::ams::os::UserExceptionInfo *exc_info, const char *fmt, std::va_list vl) {
+        /* Prepare to abort. */
+        PrepareAbort();
+
+        /* Acquire exclusive abort rights. */
+        if (g_abort_mutex.IsLockedByCurrentThread()) {
+            AbortWithValue(result->GetValue());
+        }
+
+        std::scoped_lock lk(g_abort_mutex);
+
+        /* Set the abort impl return address. */
+        impl::SetAbortImplReturnAddress(reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+
+        /* Create abort info. */
+        std::va_list cvl;
+        va_copy(cvl, vl);
+        const diag::LogMessage message = { fmt, std::addressof(cvl) };
+
+        const AbortInfo abort_info = {
+            AbortReason_Abort,
+            std::addressof(message),
+            expr,
+            func,
+            file,
+            line,
+        };
+        const SdkAbortInfo sdk_abort_info = {
+            abort_info,
+            *result,
+            exc_info
+        };
+
+        /* Invoke observers. */
+        ::ams::diag::impl::InvokeAbortObserver(abort_info);
+        ::ams::diag::impl::InvokeSdkAbortObserver(sdk_abort_info);
+
+        /* Abort. */
+        AbortWithValue(result->GetValue());
+    }
+
+}
+
+namespace ams::impl {
+
+    NORETURN NOINLINE void UnexpectedDefaultImpl(const char *func, const char *file, int line) {
+        /* Create abort info. */
+        std::va_list vl{};
+        const ::ams::diag::LogMessage message = { "" , std::addressof(vl) };
+        const ::ams::diag::AbortInfo abort_info = {
+            ::ams::diag::AbortReason_UnexpectedDefault,
+            std::addressof(message),
+            "",
+            func,
+            file,
+            line,
+        };
+
+        /* Invoke observers. */
+        ::ams::diag::impl::InvokeAbortObserver(abort_info);
+
+        /* Abort. */
+        ::ams::diag::AbortWithValue(0);
     }
 
 }

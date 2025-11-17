@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -27,7 +27,7 @@ namespace ams::pkg1 {
     enum MemoryArrange {
         MemoryArrange_Normal    = 1,
         MemoryArrange_AppletDev = 2,
-        MemoryArrange_SystemDev = 2,
+        MemoryArrange_SystemDev = 3,
     };
 
     enum MemoryMode {

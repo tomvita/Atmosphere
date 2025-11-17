@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -22,16 +22,16 @@ namespace ams::fs::impl {
 
     namespace {
 
-        MountTable g_mount_table;
+        constinit MountTable g_mount_table;
 
     }
 
     Result Register(std::unique_ptr<FileSystemAccessor> &&fs) {
-        return g_mount_table.Mount(std::move(fs));
+        R_RETURN(g_mount_table.Mount(std::move(fs)));
     }
 
     Result Find(FileSystemAccessor **out, const char *name) {
-        return g_mount_table.Find(out,  name);
+        R_RETURN(g_mount_table.Find(out, name));
     }
 
     void Unregister(const char *name) {

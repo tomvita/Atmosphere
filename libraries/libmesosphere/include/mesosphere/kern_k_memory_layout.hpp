@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -20,6 +20,8 @@
 
 #if defined(ATMOSPHERE_BOARD_NINTENDO_NX)
     #include <mesosphere/board/nintendo/nx/kern_k_memory_layout.hpp>
+#elif defined(ATMOSPHERE_BOARD_QEMU_VIRT)
+    #include <mesosphere/board/qemu/virt/kern_k_memory_layout.hpp>
 #else
     #error "Unknown board for KMemoryLayout"
 #endif
@@ -44,23 +46,24 @@ namespace ams::kern {
     constexpr size_t KernelInitialPageHeapSize  = 128_KB;
 
     constexpr size_t KernelSlabHeapDataSize           = 5_MB;
-    constexpr size_t KernelSlabHeapGapsSize           = 2_MB - 64_KB;
-    constexpr size_t KernelSlabHeapGapsSizeDeprecated = 2_MB;
-    constexpr size_t KernelSlabHeapSize               = KernelSlabHeapDataSize + KernelSlabHeapGapsSize;
+    constexpr size_t KernelSlabHeapGapsSizeMax        = 2_MB - 64_KB;
+    constexpr size_t KernelSlabHeapSize               = KernelSlabHeapDataSize + KernelSlabHeapGapsSizeMax;
 
-    /* NOTE: This is calculated from KThread slab counts, assuming KThread size <= 0x860. */
-    constexpr size_t KernelSlabHeapAdditionalSize     = 0x68000;
+    /* NOTE: This is calculated from KThread slab counts, assuming KThread size <= 0x800. */
+    constexpr size_t KernelPageBufferHeapSize         = 0x3E0000;
+    constexpr size_t KernelSlabHeapAdditionalSize     = 0x148000;
+    constexpr size_t KernelPageBufferAdditionalSize   = 0x33C000;
 
-    constexpr size_t KernelResourceSize               = KernelPageTableHeapSize + KernelInitialPageHeapSize + KernelSlabHeapSize;
+    constexpr size_t KernelResourceSize               = KernelPageTableHeapSize + KernelInitialPageHeapSize + KernelSlabHeapSize + KernelPageBufferHeapSize;
 
     class KMemoryLayout {
         private:
-            static /* constinit */ inline uintptr_t s_linear_phys_to_virt_diff;
-            static /* constinit */ inline uintptr_t s_linear_virt_to_phys_diff;
-            static /* constinit */ inline KMemoryRegionTree s_virtual_tree;
-            static /* constinit */ inline KMemoryRegionTree s_physical_tree;
-            static /* constinit */ inline KMemoryRegionTree s_virtual_linear_tree;
-            static /* constinit */ inline KMemoryRegionTree s_physical_linear_tree;
+            static constinit inline uintptr_t s_linear_phys_to_virt_diff;
+            static constinit inline uintptr_t s_linear_virt_to_phys_diff;
+            static constinit inline KMemoryRegionTree s_virtual_tree;
+            static constinit inline KMemoryRegionTree s_physical_tree;
+            static constinit inline KMemoryRegionTree s_virtual_linear_tree;
+            static constinit inline KMemoryRegionTree s_physical_linear_tree;
         private:
             template<typename AddressType> requires IsKTypedAddress<AddressType>
             static ALWAYS_INLINE bool IsTypedAddress(const KMemoryRegion *&region, AddressType address, KMemoryRegionTree &tree, KMemoryRegionType type) {
@@ -112,7 +115,9 @@ namespace ams::kern {
             }
 
             static ALWAYS_INLINE KVirtualAddress GetStackTopAddress(s32 core_id, KMemoryRegionType type) {
-                return Dereference(GetVirtualMemoryRegionTree().FindByTypeAndAttribute(type, static_cast<u32>(core_id))).GetEndAddress();
+                const auto &region = Dereference(GetVirtualMemoryRegionTree().FindByTypeAndAttribute(type, static_cast<u32>(core_id)));
+                MESOSPHERE_INIT_ABORT_UNLESS(region.GetEndAddress() != 0);
+                return region.GetEndAddress();
             }
         public:
             static ALWAYS_INLINE KMemoryRegionTree &GetVirtualMemoryRegionTree()        { return s_virtual_tree; }
@@ -123,47 +128,49 @@ namespace ams::kern {
             static ALWAYS_INLINE KVirtualAddress GetLinearVirtualAddress(KPhysicalAddress address)  { return GetInteger(address) + s_linear_phys_to_virt_diff; }
             static ALWAYS_INLINE KPhysicalAddress GetLinearPhysicalAddress(KVirtualAddress address) { return GetInteger(address) + s_linear_virt_to_phys_diff; }
 
-            static NOINLINE const KMemoryRegion *Find(KVirtualAddress address)  { return Find(address, GetVirtualMemoryRegionTree()); }
-            static NOINLINE const KMemoryRegion *Find(KPhysicalAddress address) { return Find(address, GetPhysicalMemoryRegionTree()); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion *Find(KVirtualAddress address)  { return Find(address, GetVirtualMemoryRegionTree()); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion *Find(KPhysicalAddress address) { return Find(address, GetPhysicalMemoryRegionTree()); }
 
-            static NOINLINE const KMemoryRegion *FindLinear(KVirtualAddress address)  { return Find(address, GetVirtualLinearMemoryRegionTree());  }
-            static NOINLINE const KMemoryRegion *FindLinear(KPhysicalAddress address) { return Find(address, GetPhysicalLinearMemoryRegionTree()); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion *FindLinear(KVirtualAddress address)  { return Find(address, GetVirtualLinearMemoryRegionTree());  }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion *FindLinear(KPhysicalAddress address) { return Find(address, GetPhysicalLinearMemoryRegionTree()); }
 
-            static NOINLINE KVirtualAddress GetMainStackTopAddress(s32 core_id)      { return GetStackTopAddress(core_id, KMemoryRegionType_KernelMiscMainStack); }
-            static NOINLINE KVirtualAddress GetIdleStackTopAddress(s32 core_id)      { return GetStackTopAddress(core_id, KMemoryRegionType_KernelMiscIdleStack); }
-            static NOINLINE KVirtualAddress GetExceptionStackTopAddress(s32 core_id) { return GetStackTopAddress(core_id, KMemoryRegionType_KernelMiscExceptionStack); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG KVirtualAddress GetMainStackTopAddress(s32 core_id)      { return GetStackTopAddress(core_id, KMemoryRegionType_KernelMiscMainStack); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG KVirtualAddress GetIdleStackTopAddress(s32 core_id)      { return GetStackTopAddress(core_id, KMemoryRegionType_KernelMiscIdleStack); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG KVirtualAddress GetExceptionStackTopAddress(s32 core_id) { return GetStackTopAddress(core_id, KMemoryRegionType_KernelMiscExceptionStack); }
 
-            static NOINLINE KVirtualAddress GetSlabRegionAddress()      { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_KernelSlab)).GetAddress(); }
-            static NOINLINE KVirtualAddress GetCoreLocalRegionAddress() { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_CoreLocalRegion)).GetAddress(); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG KVirtualAddress GetSlabRegionAddress()      { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_KernelSlab)).GetAddress(); }
 
-            static NOINLINE const KMemoryRegion &GetDeviceRegion(KMemoryRegionType type) { return Dereference(GetPhysicalMemoryRegionTree().FindFirstDerived(type)); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion &GetDeviceRegion(KMemoryRegionType type) { return Dereference(GetPhysicalMemoryRegionTree().FindFirstDerived(type)); }
             static KPhysicalAddress GetDevicePhysicalAddress(KMemoryRegionType type) { return GetDeviceRegion(type).GetAddress(); }
             static KVirtualAddress  GetDeviceVirtualAddress(KMemoryRegionType type)  { return GetDeviceRegion(type).GetPairAddress(); }
 
-            static NOINLINE const KMemoryRegion &GetPoolManagementRegion() { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_VirtualDramPoolManagement)); }
-            static NOINLINE const KMemoryRegion &GetPageTableHeapRegion()  { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_VirtualDramKernelPtHeap)); }
-            static NOINLINE const KMemoryRegion &GetKernelStackRegion()    { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_KernelStack)); }
-            static NOINLINE const KMemoryRegion &GetTempRegion()           { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_KernelTemp)); }
-            static NOINLINE const KMemoryRegion &GetCoreLocalRegion()      { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_CoreLocalRegion)); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion &GetPoolManagementRegion() { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_VirtualDramPoolManagement)); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion &GetPageTableHeapRegion()  { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_VirtualDramKernelPtHeap)); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion &GetKernelStackRegion()    { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_KernelStack)); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion &GetTempRegion()           { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_KernelTemp)); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion &GetSlabRegion()           { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_KernelSlab)); }
 
-            static NOINLINE const KMemoryRegion &GetKernelTraceBufferRegion() { return Dereference(GetVirtualLinearMemoryRegionTree().FindByType(KMemoryRegionType_VirtualDramKernelTraceBuffer)); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion &GetKernelTraceBufferRegion() { return Dereference(GetVirtualLinearMemoryRegionTree().FindByType(KMemoryRegionType_VirtualDramKernelTraceBuffer)); }
 
-            static NOINLINE const KMemoryRegion &GetVirtualLinearRegion(KVirtualAddress address) { return Dereference(FindLinear(address)); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion &GetSecureAppletMemoryRegion() { return Dereference(GetVirtualMemoryRegionTree().FindByType(KMemoryRegionType_VirtualDramKernelSecureAppletMemory)); }
 
-            static NOINLINE const KMemoryRegion *GetPhysicalKernelTraceBufferRegion() { return GetPhysicalMemoryRegionTree().FindFirstDerived(KMemoryRegionType_KernelTraceBuffer); }
-            static NOINLINE const KMemoryRegion *GetPhysicalOnMemoryBootImageRegion() { return GetPhysicalMemoryRegionTree().FindFirstDerived(KMemoryRegionType_OnMemoryBootImage); }
-            static NOINLINE const KMemoryRegion *GetPhysicalDTBRegion()               { return GetPhysicalMemoryRegionTree().FindFirstDerived(KMemoryRegionType_DTB); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion &GetVirtualLinearRegion(KVirtualAddress address) { return Dereference(FindLinear(address)); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion &GetPhysicalLinearRegion(KPhysicalAddress address) { return Dereference(FindLinear(address)); }
 
-            static NOINLINE bool IsHeapPhysicalAddress(const KMemoryRegion *&region, KPhysicalAddress address) { return IsTypedAddress(region, address, GetPhysicalLinearMemoryRegionTree(), KMemoryRegionType_DramUserPool); }
-            static NOINLINE bool IsHeapVirtualAddress(const KMemoryRegion *&region, KVirtualAddress address)   { return IsTypedAddress(region, address, GetVirtualLinearMemoryRegionTree(),  KMemoryRegionType_VirtualDramUserPool); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion *GetPhysicalKernelTraceBufferRegion() { return GetPhysicalMemoryRegionTree().FindFirstDerived(KMemoryRegionType_KernelTraceBuffer); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion *GetPhysicalOnMemoryBootImageRegion() { return GetPhysicalMemoryRegionTree().FindFirstDerived(KMemoryRegionType_OnMemoryBootImage); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG const KMemoryRegion *GetPhysicalDTBRegion()               { return GetPhysicalMemoryRegionTree().FindFirstDerived(KMemoryRegionType_DTB); }
 
-            static NOINLINE bool IsHeapPhysicalAddress(const KMemoryRegion *&region, KPhysicalAddress address, size_t size) { return IsTypedAddress(region, address, size, GetPhysicalLinearMemoryRegionTree(), KMemoryRegionType_DramUserPool); }
-            static NOINLINE bool IsHeapVirtualAddress(const KMemoryRegion *&region, KVirtualAddress address, size_t size)   { return IsTypedAddress(region, address, size, GetVirtualLinearMemoryRegionTree(),  KMemoryRegionType_VirtualDramUserPool); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG bool IsHeapPhysicalAddress(const KMemoryRegion *&region, KPhysicalAddress address) { return IsTypedAddress(region, address, GetPhysicalLinearMemoryRegionTree(), KMemoryRegionType_DramUserPool); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG bool IsHeapVirtualAddress(const KMemoryRegion *&region, KVirtualAddress address)   { return IsTypedAddress(region, address, GetVirtualLinearMemoryRegionTree(),  KMemoryRegionType_VirtualDramUserPool); }
 
-            static NOINLINE bool IsLinearMappedPhysicalAddress(const KMemoryRegion *&region, KPhysicalAddress address)  { return IsTypedAddress(region, address, GetPhysicalLinearMemoryRegionTree(), static_cast<KMemoryRegionType>(KMemoryRegionAttr_LinearMapped)); }
-            static NOINLINE bool IsLinearMappedPhysicalAddress(const KMemoryRegion *&region, KPhysicalAddress address, size_t size) { return IsTypedAddress(region, address, size, GetPhysicalLinearMemoryRegionTree(), static_cast<KMemoryRegionType>(KMemoryRegionAttr_LinearMapped)); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG bool IsHeapPhysicalAddress(const KMemoryRegion *&region, KPhysicalAddress address, size_t size) { return IsTypedAddress(region, address, size, GetPhysicalLinearMemoryRegionTree(), KMemoryRegionType_DramUserPool); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG bool IsHeapVirtualAddress(const KMemoryRegion *&region, KVirtualAddress address, size_t size)   { return IsTypedAddress(region, address, size, GetVirtualLinearMemoryRegionTree(),  KMemoryRegionType_VirtualDramUserPool); }
 
-            static NOINLINE std::tuple<size_t, size_t> GetTotalAndKernelMemorySizes() {
+            static MESOSPHERE_NOINLINE_IF_DEBUG bool IsLinearMappedPhysicalAddress(const KMemoryRegion *&region, KPhysicalAddress address)  { return IsTypedAddress(region, address, GetPhysicalLinearMemoryRegionTree(), static_cast<KMemoryRegionType>(KMemoryRegionAttr_LinearMapped)); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG bool IsLinearMappedPhysicalAddress(const KMemoryRegion *&region, KPhysicalAddress address, size_t size) { return IsTypedAddress(region, address, size, GetPhysicalLinearMemoryRegionTree(), static_cast<KMemoryRegionType>(KMemoryRegionAttr_LinearMapped)); }
+
+            static  std::tuple<size_t, size_t> GetTotalAndKernelMemorySizes() {
                 size_t total_size = 0, kernel_size = 0;
                 for (const auto &region : GetPhysicalMemoryRegionTree()) {
                     if (region.IsDerivedFrom(KMemoryRegionType_Dram)) {
@@ -176,47 +183,57 @@ namespace ams::kern {
                 return std::make_tuple(total_size, kernel_size);
             }
 
-            static void InitializeLinearMemoryRegionTrees(KPhysicalAddress aligned_linear_phys_start, KVirtualAddress linear_virtual_start);
-            static size_t GetResourceRegionSizeForInit();
-
-            static NOINLINE auto GetKernelRegionExtents()      { return GetVirtualMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_Kernel); }
-            static NOINLINE auto GetKernelCodeRegionExtents()  { return GetVirtualMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_KernelCode); }
-            static NOINLINE auto GetKernelStackRegionExtents() { return GetVirtualMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_KernelStack); }
-            static NOINLINE auto GetKernelMiscRegionExtents()  { return GetVirtualMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_KernelMisc); }
-            static NOINLINE auto GetKernelSlabRegionExtents()  { return GetVirtualMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_KernelSlab); }
-
-
-            static NOINLINE auto GetLinearRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionAttr_LinearMapped); }
-
-            static NOINLINE auto GetLinearRegionVirtualExtents()  {
-                auto physical = GetLinearRegionPhysicalExtents();
-                return KMemoryRegion(GetInteger(GetLinearVirtualAddress(physical.GetAddress())), physical.GetSize(), 0, KMemoryRegionType_None);
+            static void InitializeLinearMemoryAddresses(u64 phys_to_virt_diff) {
+                /* Set static differences. */
+                s_linear_phys_to_virt_diff =  phys_to_virt_diff;
+                s_linear_virt_to_phys_diff = -phys_to_virt_diff;
             }
 
-            static NOINLINE auto GetMainMemoryPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_Dram); }
-            static NOINLINE auto GetCarveoutRegionExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionAttr_CarveoutProtected); }
+            static void InitializeLinearMemoryRegionTrees();
 
-            static NOINLINE auto GetKernelRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramKernelBase); }
-            static NOINLINE auto GetKernelCodeRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramKernelCode); }
-            static NOINLINE auto GetKernelSlabRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramKernelSlab); }
-            static NOINLINE auto GetKernelPageTableHeapRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramKernelPtHeap); }
-            static NOINLINE auto GetKernelInitPageTableRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramKernelInitPt); }
+            static size_t GetResourceRegionSizeForInit(bool use_extra_resource);
 
-            static NOINLINE auto GetKernelPoolManagementRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramPoolManagement); }
-            static NOINLINE auto GetKernelPoolPartitionRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramPoolPartition); }
-            static NOINLINE auto GetKernelSystemPoolRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramSystemPool); }
-            static NOINLINE auto GetKernelSystemNonSecurePoolRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramSystemNonSecurePool); }
-            static NOINLINE auto GetKernelAppletPoolRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramAppletPool); }
-            static NOINLINE auto GetKernelApplicationPoolRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramApplicationPool); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelRegionExtents()      { return GetVirtualMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_Kernel); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelCodeRegionExtents()  { return GetVirtualMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_KernelCode); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelStackRegionExtents() { return GetVirtualMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_KernelStack); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelMiscRegionExtents()  { return GetVirtualMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_KernelMisc); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelSlabRegionExtents()  { return GetVirtualMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_KernelSlab); }
 
-            static NOINLINE auto GetKernelTraceBufferRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_KernelTraceBuffer); }
+
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetLinearRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionAttr_LinearMapped); }
+
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetLinearRegionVirtualExtents()  {
+                const auto physical = GetLinearRegionPhysicalExtents();
+                return KMemoryRegion(GetInteger(GetLinearVirtualAddress(physical.GetAddress())), GetInteger(GetLinearVirtualAddress(physical.GetLastAddress())), 0, KMemoryRegionType_None);
+            }
+
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetMainMemoryPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_Dram); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetCarveoutRegionExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionAttr_CarveoutProtected); }
+
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramKernelBase); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelCodeRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramKernelCode); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelSlabRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramKernelSlab); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelSecureAppletMemoryRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramKernelSecureAppletMemory); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelPageTableHeapRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramKernelPtHeap); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelInitPageTableRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramKernelInitPt); }
+
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelPoolPartitionRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramPoolPartition); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelPoolManagementRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramPoolManagement); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelSystemPoolRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramSystemPool); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelSystemNonSecurePoolRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramSystemNonSecurePool); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelAppletPoolRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramAppletPool); }
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelApplicationPoolRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_DramApplicationPool); }
+
+            static MESOSPHERE_NOINLINE_IF_DEBUG bool HasKernelSystemNonSecurePoolRegion() { return GetPhysicalMemoryRegionTree().FindFirstDerived(KMemoryRegionType_DramSystemNonSecurePool) != nullptr; }
+            static MESOSPHERE_NOINLINE_IF_DEBUG bool HasKernelAppletPoolRegion() { return GetPhysicalMemoryRegionTree().FindFirstDerived(KMemoryRegionType_DramAppletPool) != nullptr; }
+            static MESOSPHERE_NOINLINE_IF_DEBUG bool HasKernelApplicationPoolRegion() { return GetPhysicalMemoryRegionTree().FindFirstDerived(KMemoryRegionType_DramApplicationPool) != nullptr; }
+
+            static MESOSPHERE_NOINLINE_IF_DEBUG auto GetKernelTraceBufferRegionPhysicalExtents() { return GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(KMemoryRegionType_KernelTraceBuffer); }
     };
-
 
     namespace init {
 
         /* These should be generic, regardless of board. */
-        void SetupCoreLocalRegionMemoryRegions(KInitialPageTable &page_table, KInitialPageAllocator &page_allocator);
         void SetupPoolPartitionMemoryRegions();
 
         /* These may be implemented in a board-specific manner. */

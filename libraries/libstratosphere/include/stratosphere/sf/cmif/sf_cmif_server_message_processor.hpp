@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,8 +15,8 @@
  */
 
 #pragma once
-#include "../sf_service_object.hpp"
-#include "sf_cmif_pointer_and_size.hpp"
+#include <stratosphere/sf/sf_service_object.hpp>
+#include <stratosphere/sf/cmif/sf_cmif_pointer_and_size.hpp>
 
 namespace ams::sf::cmif {
 
@@ -28,34 +28,38 @@ namespace ams::sf::cmif {
     /* This is needed for non-templated domain message processing. */
     struct ServerMessageRuntimeMetadata {
         u16 in_data_size;
-        u16 out_data_size;
+        u16 unaligned_out_data_size;
         u8 in_headers_size;
         u8 out_headers_size;
         u8 in_object_count;
         u8 out_object_count;
 
         constexpr size_t GetInDataSize() const {
-            return size_t(this->in_data_size);
+            return static_cast<size_t>(this->in_data_size);
         }
 
         constexpr size_t GetOutDataSize() const {
-            return size_t(this->out_data_size);
+            return static_cast<size_t>(util::AlignUp(this->unaligned_out_data_size, sizeof(u32)));
+        }
+
+        constexpr size_t GetUnalignedOutDataSize() const {
+            return static_cast<size_t>(this->unaligned_out_data_size);
         }
 
         constexpr size_t GetInHeadersSize() const {
-            return size_t(this->in_headers_size);
+            return static_cast<size_t>(this->in_headers_size);
         }
 
         constexpr size_t GetOutHeadersSize() const {
-            return size_t(this->out_headers_size);
+            return static_cast<size_t>(this->out_headers_size);
         }
 
         constexpr size_t GetInObjectCount() const {
-            return size_t(this->in_object_count);
+            return static_cast<size_t>(this->in_object_count);
         }
 
         constexpr size_t GetOutObjectCount() const {
-            return size_t(this->out_object_count);
+            return static_cast<size_t>(this->out_object_count);
         }
 
         constexpr size_t GetUnfixedOutPointerSizeOffset() const {

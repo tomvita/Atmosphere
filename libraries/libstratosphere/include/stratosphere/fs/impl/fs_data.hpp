@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,6 +18,7 @@
 
 namespace ams::fs::impl {
 
+    /* ACCURATE_TO_VERSION: Unknown */
     Result QueryMountDataCacheSize(size_t *out, ncm::DataId data_id, ncm::StorageId storage_id);
 
     Result MountData(const char *name, ncm::DataId data_id, ncm::StorageId storage_id);

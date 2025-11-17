@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -21,7 +21,7 @@ namespace ams::mitm::sysupdater {
     namespace {
 
         constexpr inline int AsyncThreadCount = 1;
-        constexpr inline size_t AsyncThreadStackSize = 16_KB;
+        constexpr inline size_t AsyncThreadStackSize = 32_KB;
 
         os::ThreadType g_async_threads[AsyncThreadCount];
         alignas(os::ThreadStackAlignment) u8 g_async_thread_stack_heap[AsyncThreadCount * AsyncThreadStackSize];

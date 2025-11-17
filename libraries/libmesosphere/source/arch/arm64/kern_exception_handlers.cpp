@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -24,8 +24,6 @@ namespace ams::kern::svc {
 namespace ams::kern::arch::arm64 {
 
     namespace {
-
-        constexpr inline u32 El0PsrMask = 0xFF0FFE20;
 
         enum EsrEc : u32 {
             EsrEc_Unknown                   = 0b000000,
@@ -61,7 +59,9 @@ namespace ams::kern::arch::arm64 {
             EsrEc_BrkInstruction            = 0b111100,
         };
 
-        constexpr u32 GetInstructionData(const KExceptionContext *context, u64 esr) {
+
+
+        u32 GetInstructionDataSupervisorMode(const KExceptionContext *context, u64 esr) {
             /* Check for THUMB usermode */
             if ((context->psr & 0x3F) == 0x30) {
                 u32 insn = *reinterpret_cast<u16 *>(context->pc & ~0x1);
@@ -76,38 +76,68 @@ namespace ams::kern::arch::arm64 {
             }
         }
 
-        void HandleUserException(KExceptionContext *context, u64 esr, u64 far, u64 afsr0, u64 afsr1, u32 data) {
+        u32 GetInstructionDataUserMode(const KExceptionContext *context) {
+            /* Check for THUMB usermode */
+            u32 insn = 0;
+            if ((context->psr & 0x3F) == 0x30) {
+                u16 insn_high = 0;
+                if (UserspaceAccess::CopyMemoryFromUser(std::addressof(insn_high), reinterpret_cast<u16 *>(context->pc & ~0x1), sizeof(insn_high))) {
+                    insn = insn_high;
+
+                    /* Check if the instruction was a THUMB mode branch prefix. */
+                    if (((insn >> 11) & 0b11110) == 0b11110) {
+                        u16 insn_low = 0;
+                        if (UserspaceAccess::CopyMemoryFromUser(std::addressof(insn_low), reinterpret_cast<u16 *>((context->pc & ~0x1) + sizeof(u16)), sizeof(insn_low))) {
+                            insn = (static_cast<u32>(insn_high) << 16) | (static_cast<u32>(insn_low) << 0);
+                        } else {
+                            insn = 0;
+                        }
+                    }
+                } else {
+                    insn = 0;
+                }
+            } else {
+                u32 insn_value = 0;
+                if (UserspaceAccess::CopyMemoryFromUser(std::addressof(insn_value), reinterpret_cast<u32 *>(context->pc), sizeof(insn_value))) {
+                    insn = insn_value;
+                } else if (KTargetSystem::IsDebugMode() && (context->pc & 3) == 0 && UserspaceAccess::CopyMemoryFromUserSize32BitWithSupervisorAccess(std::addressof(insn_value), reinterpret_cast<u32 *>(context->pc))) {
+                    insn = insn_value;
+                } else {
+                    insn = 0;
+                }
+            }
+            return insn;
+        }
+
+        void HandleUserException(KExceptionContext *context, u64 raw_esr, u64 raw_far, u64 afsr0, u64 afsr1, u32 data) {
+            /* Pre-process exception registers as needed. */
+            u64 esr = raw_esr;
+            u64 far = raw_far;
+            const u64 ec = (esr >> 26) & 0x3F;
+            if (ec == EsrEc_InstructionAbortEl0 || ec == EsrEc_DataAbortEl0) {
+                /* Adjust registers if a synchronous external abort has occurred with far not valid. */
+                /*     Mask 0x03F = Low 6 bits IFSC == 0x10: "Synchronous External abort,            */
+                /*     not on translation table walk or hardware update of translation table.        */
+                /*     Mask 0x400 = FnV = "FAR Not Valid"                                            */
+                /* TODO: How would we perform this check using named register accesses? */
+                if ((esr & 0x43F) == 0x410) {
+                    /* Clear the faulting register on memory tagging exception. */
+                    far = 0;
+                } else {
+                    /* If the faulting address is a kernel address, set ISFC = 4. */
+                    if (far >= ams::svc::AddressMemoryRegion39Size) {
+                        esr = (esr & 0xFFFFFFC0) | 4;
+                    }
+                }
+            }
+
             KProcess &cur_process = GetCurrentProcess();
             bool should_process_user_exception = KTargetSystem::IsUserExceptionHandlersEnabled();
 
-            const u64 ec = (esr >> 26) & 0x3F;
-            switch (ec) {
-                case EsrEc_Unknown:
-                case EsrEc_IllegalExecution:
-                case EsrEc_Svc32:
-                case EsrEc_Svc64:
-                case EsrEc_PcAlignmentFault:
-                case EsrEc_SpAlignmentFault:
-                case EsrEc_SErrorInterrupt:
-                case EsrEc_BreakPointEl0:
-                case EsrEc_SoftwareStepEl0:
-                case EsrEc_WatchPointEl0:
-                case EsrEc_BkptInstruction:
-                case EsrEc_BrkInstruction:
-                    break;
-                default:
-                    {
-                        /* If the fault address's state is KMemoryState_Code and the user can't read the address, force processing exception. */
-                        KMemoryInfo info;
-                        ams::svc::PageInfo pi;
-                        if (R_SUCCEEDED(cur_process.GetPageTable().QueryInfo(std::addressof(info), std::addressof(pi), far))) {
-                            if (info.GetState() == KMemoryState_Code && ((info.GetPermission() & KMemoryPermission_UserRead) != KMemoryPermission_UserRead)) {
-                                should_process_user_exception = true;
-                            }
-                        }
-                    }
-                    break;
-            }
+            /* In the event that we return from this exception, we want SPSR.SS set so that we advance an instruction if single-stepping. */
+            #if defined(MESOSPHERE_ENABLE_HARDWARE_SINGLE_STEP)
+            context->psr |= (1ul << 21);
+            #endif
 
             /* If we should process the user exception (and it's not a breakpoint), try to enter. */
             const bool is_software_break = (ec == EsrEc_Unknown || ec == EsrEc_IllegalExecution || ec == EsrEc_BkptInstruction || ec == EsrEc_BrkInstruction);
@@ -121,7 +151,7 @@ namespace ams::kern::arch::arm64 {
                     const bool is_aarch64 = (context->psr & 0x10) == 0;
                     if (is_aarch64) {
                         /* 64-bit. */
-                        ams::svc::aarch64::ExceptionInfo *info = std::addressof(GetPointer<ams::svc::aarch64::ProcessLocalRegion>(cur_process.GetProcessLocalRegionAddress())->exception_info);
+                        ams::svc::aarch64::ExceptionInfo *info = std::addressof(static_cast<ams::svc::aarch64::ProcessLocalRegion *>(cur_process.GetProcessLocalRegionHeapAddress())->exception_info);
 
                         for (size_t i = 0; i < util::size(info->r); ++i) {
                             info->r[i] = context->x[i];
@@ -129,14 +159,14 @@ namespace ams::kern::arch::arm64 {
                         info->sp     = context->sp;
                         info->lr     = context->x[30];
                         info->pc     = context->pc;
-                        info->pstate = (context->psr & El0PsrMask);
+                        info->pstate = (context->psr & cpu::El0Aarch64PsrMask);
                         info->afsr0  = afsr0;
                         info->afsr1  = afsr1;
                         info->esr    = esr;
                         info->far    = far;
                     } else {
                         /* 32-bit. */
-                        ams::svc::aarch32::ExceptionInfo *info = std::addressof(GetPointer<ams::svc::aarch32::ProcessLocalRegion>(cur_process.GetProcessLocalRegionAddress())->exception_info);
+                        ams::svc::aarch32::ExceptionInfo *info = std::addressof(static_cast<ams::svc::aarch32::ProcessLocalRegion *>(cur_process.GetProcessLocalRegionHeapAddress())->exception_info);
 
                         for (size_t i = 0; i < util::size(info->r); ++i) {
                             info->r[i] = context->x[i];
@@ -146,7 +176,7 @@ namespace ams::kern::arch::arm64 {
                         info->pc     = context->pc;
                         info->flags  = 1;
 
-                        info->status_64.pstate = (context->psr & El0PsrMask);
+                        info->status_64.pstate = (context->psr & cpu::El0Aarch32PsrMask);
                         info->status_64.afsr0  = afsr0;
                         info->status_64.afsr1  = afsr1;
                         info->status_64.esr    = esr;
@@ -154,7 +184,7 @@ namespace ams::kern::arch::arm64 {
                     }
 
                     /* Save the debug parameters to the current thread. */
-                    GetCurrentThread().SaveDebugParams(far, esr, data);
+                    GetCurrentThread().SaveDebugParams(raw_far, raw_esr, data);
 
                     /* Get the exception type. */
                     u32 type;
@@ -187,6 +217,13 @@ namespace ams::kern::arch::arm64 {
                             type = ams::svc::ExceptionType_InstructionAbort;
                             break;
                         case EsrEc_DataAbortEl0:
+                            /* If esr.IFSC is "Alignment Fault", return UnalignedData instead of DataAbort. */
+                            if ((esr & 0x3F) == 0b100001) {
+                                type = ams::svc::ExceptionType_UnalignedData;
+                            } else {
+                                type = ams::svc::ExceptionType_DataAbort;
+                            }
+                            break;
                         default:
                             type = ams::svc::ExceptionType_DataAbort;
                             break;
@@ -196,108 +233,146 @@ namespace ams::kern::arch::arm64 {
                     context->pc   = GetInteger(cur_process.GetEntryPoint());
                     context->x[0] = type;
                     if (is_aarch64) {
-                        context->x[1] = GetInteger(cur_process.GetProcessLocalRegionAddress() + __builtin_offsetof(ams::svc::aarch64::ProcessLocalRegion, exception_info));
+                        context->x[1]   = GetInteger(cur_process.GetProcessLocalRegionAddress() + AMS_OFFSETOF(ams::svc::aarch64::ProcessLocalRegion, exception_info));
 
-                        auto *plr    = GetPointer<ams::svc::aarch64::ProcessLocalRegion>(cur_process.GetProcessLocalRegionAddress());
-                        context->sp  = util::AlignDown(reinterpret_cast<uintptr_t>(plr->data) + sizeof(plr->data), 0x10);
-                        context->psr = 0;
+                        const auto *plr = GetPointer<ams::svc::aarch64::ProcessLocalRegion>(cur_process.GetProcessLocalRegionAddress());
+                        context->sp     = util::AlignDown(reinterpret_cast<uintptr_t>(plr->data) + sizeof(plr->data), 0x10);
+                        context->psr    = 0;
                     } else {
-                        context->x[1] = GetInteger(cur_process.GetProcessLocalRegionAddress() + __builtin_offsetof(ams::svc::aarch32::ProcessLocalRegion, exception_info));
+                        context->x[1]   = GetInteger(cur_process.GetProcessLocalRegionAddress() + AMS_OFFSETOF(ams::svc::aarch32::ProcessLocalRegion, exception_info));
 
-                        auto *plr      = GetPointer<ams::svc::aarch32::ProcessLocalRegion>(cur_process.GetProcessLocalRegionAddress());
-                        context->x[13] = util::AlignDown(reinterpret_cast<uintptr_t>(plr->data) + sizeof(plr->data), 0x10);
-                        context->psr   = 0x10;
+                        const auto *plr = GetPointer<ams::svc::aarch32::ProcessLocalRegion>(cur_process.GetProcessLocalRegionAddress());
+                        context->x[13]  = util::AlignDown(reinterpret_cast<uintptr_t>(plr->data) + sizeof(plr->data), 0x08);
+                        context->psr    = 0x10;
                     }
 
-                    /* Set exception SVC permissions. */
-                    cur_process.CopyEnterExceptionSvcPermissionsTo(GetCurrentThread().GetStackParametersForExceptionSvcPermission());
+                    /* Process that we're entering a usermode exception on the current thread. */
+                    GetCurrentThread().OnEnterUsermodeException();
                     return;
                 }
             }
 
+            /* If we should, clear the thread's state as single-step. */
+            #if defined(MESOSPHERE_ENABLE_HARDWARE_SINGLE_STEP)
+            if (AMS_UNLIKELY(GetCurrentThread().IsHardwareSingleStep())) {
+                GetCurrentThread().ClearHardwareSingleStep();
+                cpu::MonitorDebugSystemControlRegisterAccessor().SetSoftwareStep(false).Store();
+                cpu::InstructionMemoryBarrier();
+            }
+            #endif
+
             {
                 /* Collect additional information based on the ec. */
-                ams::svc::DebugException exception;
-                uintptr_t param2 = 0;
-                uintptr_t param3 = 0;
+                uintptr_t params[3] = {};
                 switch (ec) {
                      case EsrEc_Unknown:
                      case EsrEc_IllegalExecution:
                      case EsrEc_BkptInstruction:
                      case EsrEc_BrkInstruction:
                          {
-                             exception = ams::svc::DebugException_UndefinedInstruction;
-                             param2 = far;
-                             param3 = data;
+                             params[0] = ams::svc::DebugException_UndefinedInstruction;
+                             params[1] = far;
+                             params[2] = data;
                          }
                          break;
                      case EsrEc_PcAlignmentFault:
                      case EsrEc_SpAlignmentFault:
                          {
-                             exception = ams::svc::DebugException_AlignmentFault;
-                             param2    = far;
+                             params[0] = ams::svc::DebugException_AlignmentFault;
+                             params[1]    = far;
                          }
                          break;
                      case EsrEc_Svc32:
                      case EsrEc_Svc64:
                          {
-                             exception = ams::svc::DebugException_UndefinedSystemCall;
-                             param2 = far;
-                             param3 = (esr & 0xFF);
+                             params[0] = ams::svc::DebugException_UndefinedSystemCall;
+                             params[1] = far;
+                             params[2] = (esr & 0xFF);
                          }
                          break;
                      case EsrEc_BreakPointEl0:
                      case EsrEc_SoftwareStepEl0:
                          {
-                             exception = ams::svc::DebugException_BreakPoint;
-                             param2    = far;
-                             param3    = ams::svc::BreakPointType_HardwareInstruction;
+                             params[0] = ams::svc::DebugException_BreakPoint;
+                             params[1] = far;
+                             params[2] = ams::svc::BreakPointType_HardwareInstruction;
                          }
                          break;
                      case EsrEc_WatchPointEl0:
                          {
-                             exception = ams::svc::DebugException_BreakPoint;
-                             param2    = far;
-                             param3    = ams::svc::BreakPointType_HardwareInstruction;
+                             params[0] = ams::svc::DebugException_BreakPoint;
+                             params[1] = far;
+                             params[2] = ams::svc::BreakPointType_HardwareData;
                          }
                          break;
                      case EsrEc_SErrorInterrupt:
                          {
-                             exception = ams::svc::DebugException_MemorySystemError;
-                             param2    = far;
+                             params[0] = ams::svc::DebugException_MemorySystemError;
+                             params[1] = far;
                          }
                          break;
                      case EsrEc_InstructionAbortEl0:
                          {
-                             exception = ams::svc::DebugException_InstructionAbort;
-                             param2    = far;
+                             params[0] = ams::svc::DebugException_InstructionAbort;
+                             params[1] = far;
                          }
                          break;
                      case EsrEc_DataAbortEl0:
                      default:
                          {
-                             exception = ams::svc::DebugException_DataAbort;
-                             param2    = far;
+                             params[0] = ams::svc::DebugException_DataAbort;
+                             params[1] = far;
                          }
                          break;
                 }
 
                 /* Process the debug event. */
-                Result result = KDebug::OnDebugEvent(ams::svc::DebugEvent_Exception, exception, param2, param3);
+                Result result = KDebug::OnDebugEvent(ams::svc::DebugEvent_Exception, params, util::size(params));
 
                 /* If we should stop processing the exception, do so. */
                 if (svc::ResultStopProcessingException::Includes(result)) {
                     return;
                 }
 
-                /* Print that an exception occurred. */
-                MESOSPHERE_RELEASE_LOG("Exception occurred. %016lx\n", GetCurrentProcess().GetProgramId());
+                #if defined(MESOSPHERE_ENABLE_HARDWARE_SINGLE_STEP)
+                {
+                    if (ec != EsrEc_SoftwareStepEl0) {
+                        /* If the exception wasn't single-step, print details. */
+                        MESOSPHERE_EXCEPTION_LOG("Exception occurred. ");
 
+                        {
+                            /* Print the current thread's registers. */
+                            KDebug::PrintRegister();
+
+                            /* Print a backtrace. */
+                            KDebug::PrintBacktrace();
+                        }
+                    } else {
+                        /* If the exception was single-step and we have no debug object, we should just return. */
+                        if (AMS_UNLIKELY(!cur_process.IsAttachedToDebugger())) {
+                            return;
+                        }
+                    }
+                }
+                #else
+                {
+                    /* Print that an exception occurred. */
+                    MESOSPHERE_EXCEPTION_LOG("Exception occurred. ");
+
+                    {
+                        /* Print the current thread's registers. */
+                        KDebug::PrintRegister();
+
+                        /* Print a backtrace. */
+                        KDebug::PrintBacktrace();
+                    }
+                }
+                #endif
 
                 /* If the SVC is handled, handle it. */
                 if (!svc::ResultNotHandled::Includes(result)) {
                     /* If we successfully enter jit debug, stop processing the exception. */
-                    if (cur_process.EnterJitDebug(ams::svc::DebugEvent_Exception, exception, param2, param3)) {
+                    if (cur_process.EnterJitDebug(ams::svc::DebugEvent_Exception, static_cast<ams::svc::DebugException>(params[0]), params[1], params[2])) {
                         return;
                     }
                 }
@@ -331,20 +406,19 @@ namespace ams::kern::arch::arm64 {
             ams::svc::aarch32::ExceptionInfo info32;
         } info = {};
 
-
         const bool is_aarch64 = (e_ctx->psr & 0x10) == 0;
         if (is_aarch64) {
             /* We're 64-bit. */
-            info.info64 = GetPointer<ams::svc::aarch64::ProcessLocalRegion>(cur_process.GetProcessLocalRegionAddress())->exception_info;
+            info.info64 = static_cast<const ams::svc::aarch64::ProcessLocalRegion *>(cur_process.GetProcessLocalRegionHeapAddress())->exception_info;
         } else {
             /* We're 32-bit. */
-            info.info32 = GetPointer<ams::svc::aarch32::ProcessLocalRegion>(cur_process.GetProcessLocalRegionAddress())->exception_info;
+            info.info32 = static_cast<const ams::svc::aarch32::ProcessLocalRegion *>(cur_process.GetProcessLocalRegionHeapAddress())->exception_info;
         }
 
         /* Try to leave the user exception. */
         if (cur_process.LeaveUserException()) {
-            /* We left user exception. Alter our SVC permissions accordingly. */
-            cur_process.CopyLeaveExceptionSvcPermissionsTo(cur_thread->GetStackParametersForExceptionSvcPermission());
+            /* Process that we're leaving a usermode exception on the current thread. */
+            GetCurrentThread().OnLeaveUsermodeException();
 
             /* Copy the user context to the thread context. */
             if (is_aarch64) {
@@ -354,7 +428,7 @@ namespace ams::kern::arch::arm64 {
                 e_ctx->x[30] = info.info64.lr;
                 e_ctx->sp    = info.info64.sp;
                 e_ctx->pc    = info.info64.pc;
-                e_ctx->psr   = (info.info64.pstate & El0PsrMask) | (e_ctx->psr & ~El0PsrMask);
+                e_ctx->psr   = (info.info64.pstate & cpu::El0Aarch64PsrMask) | (e_ctx->psr & ~cpu::El0Aarch64PsrMask);
             } else {
                 for (size_t i = 0; i < util::size(info.info32.r); ++i) {
                     e_ctx->x[i] = info.info32.r[i];
@@ -362,7 +436,7 @@ namespace ams::kern::arch::arm64 {
                 e_ctx->x[14] = info.info32.lr;
                 e_ctx->x[13] = info.info32.sp;
                 e_ctx->pc    = info.info32.pc;
-                e_ctx->psr   = (info.info32.status_64.pstate & El0PsrMask) | (e_ctx->psr & ~El0PsrMask);
+                e_ctx->psr   = (info.info32.status_64.pstate & cpu::El0Aarch32PsrMask) | (e_ctx->psr & ~cpu::El0Aarch32PsrMask);
             }
 
             /* Note that PC was adjusted. */
@@ -376,59 +450,76 @@ namespace ams::kern::arch::arm64 {
                 uintptr_t far, esr, data;
                 GetCurrentThread().RestoreDebugParams(std::addressof(far), std::addressof(esr), std::addressof(data));
 
+                /* Pre-process exception registers as needed. */
+                const u64 ec = (esr >> 26) & 0x3F;
+                if (ec == EsrEc_InstructionAbortEl0 || ec == EsrEc_DataAbortEl0) {
+                    /* Adjust registers if a synchronous external abort has occurred with far not valid. */
+                    /*     Mask 0x03F = Low 6 bits IFSC == 0x10: "Synchronous External abort,            */
+                    /*     not on translation table walk or hardware update of translation table.        */
+                    /*     Mask 0x400 = FnV = "FAR Not Valid"                                            */
+                    /* TODO: How would we perform this check using named register accesses? */
+                    if ((esr & 0x43F) == 0x410) {
+                        /* Clear the faulting register on memory tagging exception. */
+                        far = 0;
+                    } else {
+                        /* If the faulting address is a kernel address, set ISFC = 4. */
+                        if (far >= ams::svc::AddressMemoryRegion39Size) {
+                            esr = (esr & 0xFFFFFFC0) | 4;
+                        }
+                    }
+                }
+
                 /* Collect additional information based on the ec. */
-                ams::svc::DebugException exception;
-                uintptr_t param2 = 0;
-                uintptr_t param3 = 0;
-                switch ((esr >> 26) & 0x3F) {
+                uintptr_t params[3] = {};
+                switch (ec) {
                      case EsrEc_Unknown:
                      case EsrEc_IllegalExecution:
                      case EsrEc_BkptInstruction:
                      case EsrEc_BrkInstruction:
                          {
-                             exception = ams::svc::DebugException_UndefinedInstruction;
-                             param2    = far;
-                             param3    = data;
+                             params[0] = ams::svc::DebugException_UndefinedInstruction;
+                             params[1] = far;
+                             params[2] = data;
                          }
                          break;
                      case EsrEc_PcAlignmentFault:
                      case EsrEc_SpAlignmentFault:
                          {
-                             exception = ams::svc::DebugException_AlignmentFault;
-                             param2    = far;
+                             params[0] = ams::svc::DebugException_AlignmentFault;
+                             params[1] = far;
                          }
                          break;
                      case EsrEc_Svc32:
                      case EsrEc_Svc64:
                          {
-                             exception = ams::svc::DebugException_UndefinedSystemCall;
-                             param2    = far;
-                             param3    = (esr & 0xFF);
+                             params[0] = ams::svc::DebugException_UndefinedSystemCall;
+                             params[1] = far;
+                             params[2] = (esr & 0xFF);
                          }
                          break;
                      case EsrEc_SErrorInterrupt:
                          {
-                             exception = ams::svc::DebugException_MemorySystemError;
-                             param2    = far;
+                             params[0] = ams::svc::DebugException_MemorySystemError;
+                             params[1] = far;
                          }
                          break;
                      case EsrEc_InstructionAbortEl0:
                          {
-                             exception = ams::svc::DebugException_InstructionAbort;
-                             param2    = far;
+                             params[0] = ams::svc::DebugException_InstructionAbort;
+                             params[1] = far;
                          }
                          break;
                      case EsrEc_DataAbortEl0:
                      default:
                          {
-                             exception = ams::svc::DebugException_DataAbort;
-                             param2    = far;
+                             params[0] = ams::svc::DebugException_DataAbort;
+                             params[1] = far;
                          }
                          break;
                 }
 
                 /* Process the debug event. */
-                Result result = KDebug::OnDebugEvent(ams::svc::DebugEvent_Exception, exception, param2, param3);
+                Result result = KDebug::OnDebugEvent(ams::svc::DebugEvent_Exception, params, util::size(params));
 
                 /* If the SVC is handled, handle it. */
                 if (!svc::ResultNotHandled::Includes(result)) {
@@ -438,7 +529,7 @@ namespace ams::kern::arch::arm64 {
                     }
 
                     /* If we successfully enter jit debug, restore. */
-                    if (cur_process.EnterJitDebug(ams::svc::DebugEvent_Exception, exception, param2, param3)) {
+                    if (cur_process.EnterJitDebug(ams::svc::DebugEvent_Exception, static_cast<ams::svc::DebugException>(params[0]), params[1], params[2])) {
                         svc::RestoreContext(reinterpret_cast<uintptr_t>(e_ctx));
                     }
                 }
@@ -451,7 +542,7 @@ namespace ams::kern::arch::arm64 {
         }
 
         /* Print that an exception occurred. */
-        MESOSPHERE_RELEASE_LOG("Exception occurred. %016lx\n", GetCurrentProcess().GetProgramId());
+        MESOSPHERE_EXCEPTION_LOG("Exception occurred. ");
 
         /* Exit the current process. */
         GetCurrentProcess().Exit();
@@ -462,9 +553,10 @@ namespace ams::kern::arch::arm64 {
         MESOSPHERE_ASSERT(!KInterruptManager::AreInterruptsEnabled());
 
         /* Retrieve information about the exception. */
-        const u64 esr   = cpu::GetEsrEl1();
-        const u64 afsr0 = cpu::GetAfsr0El1();
-        const u64 afsr1 = cpu::GetAfsr1El1();
+        const bool is_user_mode = (context->psr & 0xF) == 0;
+        const u64 esr           = cpu::GetEsrEl1();
+        const u64 afsr0         = cpu::GetAfsr0El1();
+        const u64 afsr1         = cpu::GetAfsr1El1();
         u64 far  = 0;
         u32 data = 0;
 
@@ -475,7 +567,12 @@ namespace ams::kern::arch::arm64 {
             case EsrEc_BkptInstruction:
             case EsrEc_BrkInstruction:
                 far   = context->pc;
-                data = GetInstructionData(context, esr);
+                /* NOTE: Nintendo always calls GetInstructionDataUserMode. */
+                if (is_user_mode) {
+                    data = GetInstructionDataUserMode(context);
+                } else {
+                    data = GetInstructionDataSupervisorMode(context, esr);
+                }
                 break;
             case EsrEc_Svc32:
                 if (context->psr & 0x20) {
@@ -504,7 +601,6 @@ namespace ams::kern::arch::arm64 {
 
         /* Verify that spsr's M is allowable (EL0t). */
         {
-            const bool is_user_mode = (context->psr & 0xF) == 0;
             if (is_user_mode) {
                 /* If the user disable count is set, we may need to pin the current thread. */
                 if (GetCurrentThread().GetUserDisableCount() != 0 && GetCurrentProcess().GetPinnedThread(GetCurrentCoreId()) == nullptr) {
@@ -520,6 +616,11 @@ namespace ams::kern::arch::arm64 {
                 /* Enable interrupts while we process the usermode exception. */
                 {
                     KScopedInterruptEnable ei;
+
+                    /* Terminate the thread, if we should. */
+                    if (GetCurrentThread().IsTerminationRequested()) {
+                        GetCurrentThread().Exit();
+                    }
 
                     HandleUserException(context, esr, far, afsr0, afsr1, data);
                 }
@@ -547,6 +648,7 @@ namespace ams::kern::arch::arm64 {
                 KDpcManager::HandleDpc();
             }
         }
+
         /* Note that we're no longer in an exception handler. */
         GetCurrentThread().ClearInExceptionHandler();
     }

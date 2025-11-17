@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -14,43 +14,55 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <stratosphere.hpp>
+#include "pm_ams.os.horizon.h"
 
 namespace ams::pm::shell {
 
     /* Shell API. */
+    #if defined(ATMOSPHERE_OS_HORIZON)
     Result WEAK_SYMBOL LaunchProgram(os::ProcessId *out, const ncm::ProgramLocation &loc, u32 launch_flags) {
         static_assert(sizeof(ncm::ProgramLocation) == sizeof(NcmProgramLocation));
         static_assert(alignof(ncm::ProgramLocation) == alignof(NcmProgramLocation));
-        return pmshellLaunchProgram(launch_flags, reinterpret_cast<const NcmProgramLocation *>(&loc), reinterpret_cast<u64 *>(out));
+        R_RETURN(pmshellLaunchProgram(launch_flags, reinterpret_cast<const NcmProgramLocation *>(std::addressof(loc)), reinterpret_cast<u64 *>(out)));
     }
 
     Result TerminateProcess(os::ProcessId process_id) {
-        return ::pmshellTerminateProcess(static_cast<u64>(process_id));
+        R_RETURN(::pmshellTerminateProcess(static_cast<u64>(process_id)));
     }
 
     Result GetProcessEventEvent(os::SystemEvent *out) {
         ::Event evt;
         R_TRY(::pmshellGetProcessEventHandle(std::addressof(evt)));
         out->Attach(evt.revent, true, svc::InvalidHandle, false, os::EventClearMode_ManualClear);
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result GetProcessEventInfo(ProcessEventInfo *out) {
         static_assert(sizeof(*out) == sizeof(::PmProcessEventInfo));
-        return ::pmshellGetProcessEventInfo(reinterpret_cast<::PmProcessEventInfo *>(out));
+        R_RETURN(::pmshellGetProcessEventInfo(reinterpret_cast<::PmProcessEventInfo *>(out)));
     }
 
     Result GetApplicationProcessIdForShell(os::ProcessId *out) {
         static_assert(sizeof(*out) == sizeof(u64));
-        return ::pmshellGetApplicationProcessIdForShell(reinterpret_cast<u64 *>(out));
+        R_RETURN(::pmshellGetApplicationProcessIdForShell(reinterpret_cast<u64 *>(out)));
     }
 
     Result BoostSystemMemoryResourceLimit(u64 size) {
-        return ::pmshellBoostSystemMemoryResourceLimit(size);
+        R_RETURN(::pmshellBoostSystemMemoryResourceLimit(size));
     }
 
-    Result EnableApplicationExtraThread() {
-        return ::pmshellEnableApplicationExtraThread();
+    Result BoostApplicationThreadResourceLimit() {
+        R_RETURN(::pmshellBoostApplicationThreadResourceLimit());
     }
+
+    Result BoostSystemThreadResourceLimit() {
+        R_RETURN(::pmshellBoostSystemThreadResourceLimit());
+    }
+
+    Result GetProcessId(os::ProcessId *out_process_id, const ncm::ProgramId program_id) {
+        static_assert(sizeof(*out_process_id) == sizeof(u64));
+        R_RETURN(::pmshellGetProcessId(reinterpret_cast<u64 *>(out_process_id), static_cast<u64>(program_id)));
+    }
+    #endif
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -21,28 +21,39 @@ namespace ams::kern {
 
     class KTargetSystem {
         private:
+            friend class KSystemControlBase;
             friend class KSystemControl;
         private:
-            static inline bool s_is_debug_mode;
-            static inline bool s_enable_debug_logging;
-            static inline bool s_enable_user_exception_handlers;
-            static inline bool s_enable_debug_memory_fill;
-            static inline bool s_enable_user_pmu_access;
-            static inline bool s_enable_kernel_debugging;
+            struct KTargetSystemData {
+                bool is_not_debug_mode;
+                bool disable_debug_logging;
+                bool disable_user_exception_handlers;
+                bool disable_debug_memory_fill;
+                bool disable_user_pmu_access;
+                bool disable_kernel_debugging;
+                bool disable_dynamic_resource_limits;
+            };
         private:
-            static ALWAYS_INLINE void SetIsDebugMode(bool en) { s_is_debug_mode = en; }
-            static ALWAYS_INLINE void EnableDebugLogging(bool en) { s_enable_debug_logging = en; }
-            static ALWAYS_INLINE void EnableUserExceptionHandlers(bool en) { s_enable_user_exception_handlers = en; }
-            static ALWAYS_INLINE void EnableDebugMemoryFill(bool en) { s_enable_debug_memory_fill = en; }
-            static ALWAYS_INLINE void EnableUserPmuAccess(bool en) { s_enable_user_pmu_access = en; }
-            static ALWAYS_INLINE void EnableKernelDebugging(bool en) { s_enable_kernel_debugging = en; }
+            static inline constinit bool s_is_uninitialized = true;
+            static inline constinit const volatile KTargetSystemData s_data = {
+                .is_not_debug_mode               = false,
+                .disable_debug_logging           = false,
+                .disable_user_exception_handlers = false,
+                .disable_debug_memory_fill       = false,
+                .disable_user_pmu_access         = false,
+                .disable_kernel_debugging        = false,
+                .disable_dynamic_resource_limits = true,
+            };
+        private:
+            static ALWAYS_INLINE void SetInitialized() { s_is_uninitialized = false; }
         public:
-            static ALWAYS_INLINE bool IsDebugMode() { return s_is_debug_mode; }
-            static ALWAYS_INLINE bool IsDebugLoggingEnabled() { return s_enable_debug_logging; }
-            static ALWAYS_INLINE bool IsUserExceptionHandlersEnabled() { return s_enable_user_exception_handlers; }
-            static ALWAYS_INLINE bool IsDebugMemoryFillEnabled() { return s_enable_debug_memory_fill; }
-            static ALWAYS_INLINE bool IsUserPmuAccessEnabled() { return s_enable_user_pmu_access; }
-            static ALWAYS_INLINE bool IsKernelDebuggingEnabled() { return s_enable_kernel_debugging; }
+            static ALWAYS_INLINE bool IsDebugMode() { return !(s_is_uninitialized | s_data.is_not_debug_mode); }
+            static ALWAYS_INLINE bool IsDebugLoggingEnabled() { return !(s_is_uninitialized | s_data.disable_debug_logging); }
+            static ALWAYS_INLINE bool IsUserExceptionHandlersEnabled() { return !(s_is_uninitialized | s_data.disable_user_exception_handlers); }
+            static ALWAYS_INLINE bool IsDebugMemoryFillEnabled() { return !(s_is_uninitialized | s_data.disable_debug_memory_fill); }
+            static ALWAYS_INLINE bool IsUserPmuAccessEnabled() { return !(s_is_uninitialized | s_data.disable_user_pmu_access); }
+            static ALWAYS_INLINE bool IsKernelDebuggingEnabled() { return !(s_is_uninitialized | s_data.disable_kernel_debugging); }
+            static ALWAYS_INLINE bool IsDynamicResourceLimitsEnabled() { return !(s_is_uninitialized | s_data.disable_dynamic_resource_limits); }
     };
 
 }

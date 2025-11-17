@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,10 +15,11 @@
  */
 
 #pragma once
-#include "../fs_common.hpp"
+#include <stratosphere/fs/fs_common.hpp>
 
 namespace ams::fs::fsa {
 
+    /* ACCURATE_TO_VERSION: Unknown */
     class ICommonMountNameGenerator {
         public:
             virtual ~ICommonMountNameGenerator() { /* ... */ }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -13,90 +13,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-#define SAVE_THREAD_CONTEXT(ctx, tmp0, tmp1, done_label)    \
-    /* Save the callee save registers + SP and cpacr. */    \
-    mov tmp0, sp;                                           \
-    mrs tmp1, cpacr_el1;                                    \
-    stp  x19,  x20, [ctx, #(8 *  0)];                       \
-    stp  x21,  x22, [ctx, #(8 *  2)];                       \
-    stp  x23,  x24, [ctx, #(8 *  4)];                       \
-    stp  x25,  x26, [ctx, #(8 *  6)];                       \
-    stp  x27,  x28, [ctx, #(8 *  8)];                       \
-    stp  x29,  x30, [ctx, #(8 * 10)];                       \
-                                                            \
-    stp tmp0, tmp1, [ctx, #0x60];                           \
-                                                            \
-    /* Check whether the FPU is enabled. */                 \
-    /* If it isn't, skip saving FPU state. */               \
-    and tmp1, tmp1, #0x300000;                              \
-    cbz tmp1, done_label;                                   \
-                                                            \
-    /* Save fpcr and fpsr. */                               \
-    mrs tmp0, fpcr;                                         \
-    mrs tmp1, fpsr;                                         \
-    stp tmp0, tmp1, [ctx, #0x70];                           \
-                                                            \
-    /* Save the FPU registers. */                           \
-    stp q0,  q1,  [ctx, #(16 *  0 + 0x80)];                 \
-    stp q2,  q3,  [ctx, #(16 *  2 + 0x80)];                 \
-    stp q4,  q5,  [ctx, #(16 *  4 + 0x80)];                 \
-    stp q6,  q7,  [ctx, #(16 *  6 + 0x80)];                 \
-    stp q8,  q9,  [ctx, #(16 *  8 + 0x80)];                 \
-    stp q10, q11, [ctx, #(16 * 10 + 0x80)];                 \
-    stp q12, q13, [ctx, #(16 * 12 + 0x80)];                 \
-    stp q14, q15, [ctx, #(16 * 14 + 0x80)];                 \
-    stp q16, q17, [ctx, #(16 * 16 + 0x80)];                 \
-    stp q18, q19, [ctx, #(16 * 18 + 0x80)];                 \
-    stp q20, q21, [ctx, #(16 * 20 + 0x80)];                 \
-    stp q22, q23, [ctx, #(16 * 22 + 0x80)];                 \
-    stp q24, q25, [ctx, #(16 * 24 + 0x80)];                 \
-    stp q26, q27, [ctx, #(16 * 26 + 0x80)];                 \
-    stp q28, q29, [ctx, #(16 * 28 + 0x80)];                 \
-    stp q30, q31, [ctx, #(16 * 30 + 0x80)];
-
-#define RESTORE_THREAD_CONTEXT(ctx, tmp0, tmp1, done_label) \
-    /* Restore the callee save registers + SP and cpacr. */ \
-    ldp tmp0, tmp1, [ctx, #0x60];                           \
-    mov sp, tmp0;                                           \
-    ldp  x19,  x20, [ctx, #(8 *  0)];                       \
-    ldp  x21,  x22, [ctx, #(8 *  2)];                       \
-    ldp  x23,  x24, [ctx, #(8 *  4)];                       \
-    ldp  x25,  x26, [ctx, #(8 *  6)];                       \
-    ldp  x27,  x28, [ctx, #(8 *  8)];                       \
-    ldp  x29,  x30, [ctx, #(8 * 10)];                       \
-                                                            \
-    msr cpacr_el1, tmp1;                                    \
-    isb;                                                    \
-                                                            \
-    /* Check whether the FPU is enabled. */                 \
-    /* If it isn't, skip saving FPU state. */               \
-    and tmp1, tmp1, #0x300000;                              \
-    cbz tmp1, done_label;                                   \
-                                                            \
-    /* Save fpcr and fpsr. */                               \
-    ldp tmp0, tmp1, [ctx, #0x70];                           \
-    msr fpcr, tmp0;                                         \
-    msr fpsr, tmp1;                                         \
-                                                            \
-    /* Save the FPU registers. */                           \
-    ldp q0,  q1,  [ctx, #(16 *  0 + 0x80)];                 \
-    ldp q2,  q3,  [ctx, #(16 *  2 + 0x80)];                 \
-    ldp q4,  q5,  [ctx, #(16 *  4 + 0x80)];                 \
-    ldp q6,  q7,  [ctx, #(16 *  6 + 0x80)];                 \
-    ldp q8,  q9,  [ctx, #(16 *  8 + 0x80)];                 \
-    ldp q10, q11, [ctx, #(16 * 10 + 0x80)];                 \
-    ldp q12, q13, [ctx, #(16 * 12 + 0x80)];                 \
-    ldp q14, q15, [ctx, #(16 * 14 + 0x80)];                 \
-    ldp q16, q17, [ctx, #(16 * 16 + 0x80)];                 \
-    ldp q18, q19, [ctx, #(16 * 18 + 0x80)];                 \
-    ldp q20, q21, [ctx, #(16 * 20 + 0x80)];                 \
-    ldp q22, q23, [ctx, #(16 * 22 + 0x80)];                 \
-    ldp q24, q25, [ctx, #(16 * 24 + 0x80)];                 \
-    ldp q26, q27, [ctx, #(16 * 26 + 0x80)];                 \
-    ldp q28, q29, [ctx, #(16 * 28 + 0x80)];                 \
-    ldp q30, q31, [ctx, #(16 * 30 + 0x80)];
-
+#include <mesosphere/kern_select_assembly_macros.h>
 
 /* ams::kern::KScheduler::ScheduleImpl() */
 .section    .text._ZN3ams4kern10KScheduler12ScheduleImplEv, "ax", %progbits
@@ -108,59 +25,135 @@
 
 _ZN3ams4kern10KScheduler12ScheduleImplEv:
     /* Right now, x0 contains (this). We want x1 to point to the scheduling state, */
-    /* Current KScheduler layout has state at +0x0. */
+    /* KScheduler layout has state at +0x0, this is guaranteed statically by assembly offsets. */
     mov    x1, x0
 
-    /* First thing we want to do is check whether the interrupt task thread is runnable. */
-    ldrb   w3, [x1, #1]
-    cbz    w3, 0f
-
-    /* If it is, we want to call KScheduler::InterruptTaskThreadToRunnable() to change its state to runnable. */
-    stp     x0,  x1, [sp, #-16]!
-    stp    x30, xzr, [sp, #-16]!
-    bl     _ZN3ams4kern10KScheduler29InterruptTaskThreadToRunnableEv
-    ldp    x30, xzr, [sp], 16
-    ldp     x0,  x1, [sp], 16
-
-    /* Clear the interrupt task thread as runnable. */
-    strb   wzr, [x1, #1]
-
-0:  /* Interrupt task thread runnable checked. */
-    /* Now we want to check if there's any scheduling to do. */
-
     /* First, clear the need's scheduling bool (and dmb ish after, as it's an atomic). */
-    /* TODO: Should this be a stlrb? Nintendo does not do one. */
     strb   wzr, [x1]
     dmb    ish
 
-    /* Check if the highest priority thread is the same as the current thread. */
-    ldr    x7, [x1, 16]
-    ldr    x2, [x18]
-    cmp    x7, x2
+    /* Check whether there are runnable interrupt tasks. */
+    ldrb   w8, [x1, #(KSCHEDULER_INTERRUPT_TASK_RUNNABLE)]
+    cbnz   w8, 0f
+
+    /* If it isn't, we want to check if the highest priority thread is the same as the current thread. */
+    ldr    x7, [x1, #(KSCHEDULER_HIGHEST_PRIORITY_THREAD)]
+    cmp    x7, x18
     b.ne   1f
 
-    /* If they're the same, then we can just return as there's nothing to do. */
+    /* If they're the same, then we can just issue a memory barrier and return. */
+    dmb    ish
     ret
+
+0:  /* The interrupt task thread is runnable. */
+    /* We want to switch to the interrupt task/idle thread. */
+    mov    x7, #0
 
 1:  /* The highest priority thread is not the same as the current thread. */
     /* Get a reference to the current thread's stack parameters. */
     add    x2, sp, #0x1000
     and    x2, x2, #~(0x1000-1)
+    sub    x2, x2, #(THREAD_STACK_PARAMETERS_SIZE)
 
-    /* Check if the thread has terminated. We can do this by checking the DPC flags for DpcFlag_Terminated. */
-    ldurb  w3, [x2, #-0x20]
-    tbnz   w3, #1, 3f
+    /* Get a reference to the current thread's context. */
+    add    x3, x2, #(THREAD_STACK_PARAMETERS_THREAD_CONTEXT)
 
-    /* The current thread hasn't terminated, so we want to save its context. */
-    ldur  x2, [x2, #-0x10]
-    SAVE_THREAD_CONTEXT(x2, x4, x5, 2f)
+    /* Save the callee-save registers + SP. */
+    stp    x19,  x20, [x3, #(THREAD_CONTEXT_X19_X20)]
+    stp    x21,  x22, [x3, #(THREAD_CONTEXT_X21_X22)]
+    stp    x23,  x24, [x3, #(THREAD_CONTEXT_X23_X24)]
+    stp    x25,  x26, [x3, #(THREAD_CONTEXT_X25_X26)]
+    stp    x27,  x28, [x3, #(THREAD_CONTEXT_X27_X28)]
+    stp    x29,  x30, [x3, #(THREAD_CONTEXT_X29_X30)]
 
-2:  /* We're done saving this thread's context, so we need to unlock it. */
-    /* We can just do an atomic write to the relevant KThreadContext member. */
-    add    x2, x2, #0x280
-    stlrb  wzr, [x2]
+    mov    x4, sp
+    str    x4, [x3, #(THREAD_CONTEXT_SP)]
 
-3:  /* The current thread's context has been entirely taken care of. */
+    /* Check if the fpu is enabled; if it is, we need to save it. */
+    mrs    x5, cpacr_el1
+    and    x4, x5, #0x300000
+    cbz    x4, 8f
+
+    /* We need to save the fpu state; save fpsr/fpcr. */
+    mrs    x4, fpcr
+    mrs    x6, fpsr
+    stp    w4, w6, [x3, #(THREAD_CONTEXT_FPCR_FPSR)]
+
+    /* Set fpu-restore-needed in our exception flags. */
+    ldrb   w4, [x2, #(THREAD_STACK_PARAMETERS_EXCEPTION_FLAGS)]
+    orr    w4, w4, #(THREAD_EXCEPTION_FLAG_IS_FPU_CONTEXT_RESTORE_NEEDED)
+    strb   w4, [x2, #(THREAD_STACK_PARAMETERS_EXCEPTION_FLAGS)]
+
+    /* We need to save fpu state based on whether we're a 64-bit or 32-bit thread. */
+    tbz    w4, #(THREAD_EXCEPTION_FLAG_BIT_INDEX_IS_FPU_64_BIT), 4f
+
+    /* We have a 64-bit fpu. */
+
+    /* If we're in a usermode exception, we need to save the caller-save fpu registers. */
+    tbz    w4, #(THREAD_EXCEPTION_FLAG_BIT_INDEX_IS_IN_USERMODE_EXCEPTION_HANDLER), 2f
+
+    /* If we're in an SVC (and not a usermode exception), we only need to save the callee-save fpu registers. */
+    tbz    w4, #(THREAD_EXCEPTION_FLAG_BIT_INDEX_IS_CALLING_SVC), 3f
+
+2:  /* Save the 64-bit caller-save fpu registers. */
+    ldr    x6, [x2, #(THREAD_STACK_PARAMETERS_CALLER_SAVE_FPU_REGISTERS)]
+    stp    q0,  q1,  [x6, #(THREAD_FPU64_CONTEXT_Q0_Q1)]
+    stp    q2,  q3,  [x6, #(THREAD_FPU64_CONTEXT_Q2_Q3)]
+    stp    q4,  q5,  [x6, #(THREAD_FPU64_CONTEXT_Q4_Q5)]
+    stp    q6,  q7,  [x6, #(THREAD_FPU64_CONTEXT_Q6_Q7)]
+    stp    q16, q17, [x6, #(THREAD_FPU64_CONTEXT_Q16_Q17)]
+    stp    q18, q19, [x6, #(THREAD_FPU64_CONTEXT_Q18_Q19)]
+    stp    q20, q21, [x6, #(THREAD_FPU64_CONTEXT_Q20_Q21)]
+    stp    q22, q23, [x6, #(THREAD_FPU64_CONTEXT_Q22_Q23)]
+    stp    q24, q25, [x6, #(THREAD_FPU64_CONTEXT_Q24_Q25)]
+    stp    q26, q27, [x6, #(THREAD_FPU64_CONTEXT_Q26_Q27)]
+    stp    q28, q29, [x6, #(THREAD_FPU64_CONTEXT_Q28_Q29)]
+    stp    q30, q31, [x6, #(THREAD_FPU64_CONTEXT_Q30_Q31)]
+
+3:  /* Save the 64-bit callee-save fpu registers. */
+    stp    q8,  q9,  [x3, #(THREAD_CONTEXT_FPU64_Q8_Q9)]
+    stp    q10, q11, [x3, #(THREAD_CONTEXT_FPU64_Q10_Q11)]
+    stp    q12, q13, [x3, #(THREAD_CONTEXT_FPU64_Q12_Q13)]
+    stp    q14, q15, [x3, #(THREAD_CONTEXT_FPU64_Q14_Q15)]
+    b      7f
+
+4:  /* We have a 32-bit fpu. */
+
+    /* If we're in a usermode exception, we need to save the caller-save fpu registers. */
+    tbz    w4, #(THREAD_EXCEPTION_FLAG_BIT_INDEX_IS_IN_USERMODE_EXCEPTION_HANDLER), 5f
+
+    /* If we're in an SVC (and not a usermode exception), we only need to save the callee-save fpu registers. */
+    tbz    w4, #(THREAD_EXCEPTION_FLAG_BIT_INDEX_IS_CALLING_SVC), 6f
+
+5:  /* Save the 32-bit caller-save fpu registers. */
+    ldr    x6, [x2, #(THREAD_STACK_PARAMETERS_CALLER_SAVE_FPU_REGISTERS)]
+    stp    q0,  q1,  [x6, #(THREAD_FPU32_CONTEXT_Q0_Q1)]
+    stp    q2,  q3,  [x6, #(THREAD_FPU32_CONTEXT_Q2_Q3)]
+    stp    q8,  q9,  [x6, #(THREAD_FPU32_CONTEXT_Q8_Q9)]
+    stp    q10, q11, [x6, #(THREAD_FPU32_CONTEXT_Q10_Q11)]
+    stp    q12, q13, [x6, #(THREAD_FPU32_CONTEXT_Q12_Q13)]
+    stp    q14, q15, [x6, #(THREAD_FPU32_CONTEXT_Q14_Q15)]
+
+6:  /* Save the 32-bit callee-save fpu registers. */
+    stp    q4,  q5,  [x3, #(THREAD_CONTEXT_FPU32_Q4_Q5)]
+    stp    q6,  q7,  [x3, #(THREAD_CONTEXT_FPU32_Q6_Q7)]
+
+7:  /* With the fpu state saved, disable the fpu. */
+    and    x5, x5, #(~0x300000)
+    msr    cpacr_el1, x5
+
+8:  /* We're done saving this thread's context. */
+
+    /* Check if the thread is terminated by checking the DPC flags for DpcFlag_Terminated. */
+    ldrb   w4, [x2, #(THREAD_STACK_PARAMETERS_DPC_FLAGS)]
+    tbnz   w4, #1, 9f
+
+    /* The thread isn't terminated, so we want to unlock it. */
+    /* Write atomically to the context's locked member. */
+    add    x3, x3, #(THREAD_CONTEXT_LOCKED)
+    stlrb  wzr, [x3]
+
+9:  /* The current thread's context has been entirely taken care of. */
     /* Now we want to loop until we successfully switch the thread context. */
     /* Start by saving all the values we care about in callee-save registers. */
     mov    x19, x0 /* this */
@@ -168,58 +161,56 @@ _ZN3ams4kern10KScheduler12ScheduleImplEv:
     mov    x21, x7 /* highest priority thread */
 
     /* Set our stack to the idle thread stack. */
-    ldr    x3, [x20, #0x18]
+    ldr    x3, [x20, #(KSCHEDULER_IDLE_THREAD_STACK)]
     mov    sp, x3
-    b      5f
+    b      11f
 
-4:  /* We failed to successfully do the context switch, and need to retry. */
+10: /* We failed to successfully do the context switch, and need to retry. */
     /* Clear the exclusive monitor. */
     clrex
 
     /* Clear the need's scheduling bool (and dmb ish after, as it's an atomic). */
-    /* TODO: Should this be a stlrb? Nintendo does not do one. */
     strb   wzr, [x20]
     dmb    ish
 
     /* Refresh the highest priority thread. */
-    ldr    x21, [x20, 16]
+    ldr    x21, [x20, #(KSCHEDULER_HIGHEST_PRIORITY_THREAD)]
 
-5:  /* We're starting to try to do the context switch. */
+11: /* We're starting to try to do the context switch. */
     /* Check if the highest priority thread if null. */
     /* If it is, we want to branch to a special idle thread loop. */
-    cbz    x21, 11f
+    cbz    x21, 16f
 
     /* Get the highest priority thread's context, and save it. */
     /* ams::kern::KThread::GetContextForSchedulerLoop() */
-    mov    x0, x21
-    bl     _ZN3ams4kern7KThread26GetContextForSchedulerLoopEv
-    mov    x22, x0
+    ldr    x22, [x21, #(THREAD_KERNEL_STACK_TOP)]
+    sub    x22, x22, #(THREAD_STACK_PARAMETERS_SIZE - THREAD_STACK_PARAMETERS_THREAD_CONTEXT)
 
     /* Prepare to try to acquire the context lock. */
-    add    x1, x22, #0x280
+    add    x1, x22, #(THREAD_CONTEXT_LOCKED)
     mov    w2, #1
 
-6:  /* We want to try to lock the highest priority thread's context. */
+12: /* We want to try to lock the highest priority thread's context. */
     /* Check if the lock is already held. */
     ldaxrb w3, [x1]
-    cbnz   w3, 7f
+    cbnz   w3, 13f
 
     /* If it's not, try to take it. */
     stxrb  w3, w2, [x1]
-    cbnz   w3, 6b
+    cbnz   w3, 12b
 
     /* We hold the lock, so we can now switch the thread. */
-    b      8f
+    b      14f
 
-7:  /* The highest priority thread's context is already locked. */
+13: /* The highest priority thread's context is already locked. */
     /* Check if we need scheduling. If we don't, we can retry directly. */
-    ldarb  w3, [x20]
-    cbz    w3, 6b
+    ldarb  w3, [x20] // ldarb w3, [x20, #(KSCHEDULER_NEEDS_SCHEDULING)]
+    cbz    w3, 12b
 
     /* If we do, another core is interfering, and we must start from the top. */
-    b      4b
+    b      10b
 
-8:  /* It's time to switch the thread. */
+14: /* It's time to switch the thread. */
     /* Switch to the highest priority thread. */
     mov    x0, x19
     mov    x1, x21
@@ -227,24 +218,32 @@ _ZN3ams4kern10KScheduler12ScheduleImplEv:
     /* Call ams::kern::KScheduler::SwitchThread(ams::kern::KThread *) */
     bl     _ZN3ams4kern10KScheduler12SwitchThreadEPNS0_7KThreadE
 
-    /* Check if we need scheduling. If we don't, then we can't complete the switch and should retry. */
-    ldarb  w1, [x20]
-    cbnz   w1, 10f
+    /* Check if we need scheduling. If we do, then we can't complete the switch and should retry. */
+    ldarb  w1, [x20] // ldarb w1, [x20, #(KSCHEDULER_NEEDS_SCHEDULING)]
+    cbnz   w1, 15f
 
     /* Restore the thread context. */
     mov    x0, x22
-    RESTORE_THREAD_CONTEXT(x0, x1, x2, 9f)
+    ldp    x19, x20, [x0, #(THREAD_CONTEXT_X19_X20)]
+    ldp    x21, x22, [x0, #(THREAD_CONTEXT_X21_X22)]
+    ldp    x23, x24, [x0, #(THREAD_CONTEXT_X23_X24)]
+    ldp    x25, x26, [x0, #(THREAD_CONTEXT_X25_X26)]
+    ldp    x27, x28, [x0, #(THREAD_CONTEXT_X27_X28)]
+    ldp    x29, x30, [x0, #(THREAD_CONTEXT_X29_X30)]
 
-9:  /* We're done restoring the thread context, and can return safely. */
+    ldr    x1, [x0, #(THREAD_CONTEXT_SP)]
+    mov    sp, x1
+
+    /* Return. */
     ret
 
-10: /* Our switch failed. */
+15: /* Our switch failed. */
     /* We should unlock the thread context, and then retry. */
-    add    x1, x22, #0x280
+    add    x1, x22, #(THREAD_CONTEXT_LOCKED)
     stlrb  wzr, [x1]
-    b      4b
+    b      10b
 
-11: /* The next thread is nullptr! */
+16: /* The next thread is nullptr! */
     /* Switch to nullptr. This will actually switch to the idle thread. */
     mov    x0, x19
     mov    x1, #0
@@ -252,29 +251,33 @@ _ZN3ams4kern10KScheduler12ScheduleImplEv:
     /* Call ams::kern::KScheduler::SwitchThread(ams::kern::KThread *) */
     bl     _ZN3ams4kern10KScheduler12SwitchThreadEPNS0_7KThreadE
 
-12: /* We've switched to the idle thread, so we want to loop until we schedule a non-idle thread. */
-    /* Check if we need scheduling. */
-    ldarb  w3, [x20]
-    cbnz   w3, 13f
+17: /* We've switched to the idle thread, so we want to process interrupt tasks until we schedule a non-idle thread. */
+    /* Check whether there are runnable interrupt tasks. */
+    ldrb   w3, [x20, #(KSCHEDULER_INTERRUPT_TASK_RUNNABLE)]
+    cbnz   w3, 18f
 
-    /* If we don't, wait for an interrupt and check again. */
+    /* Check if we need scheduling. */
+    ldarb  w3, [x20] // ldarb w3, [x20, #(KSCHEDULER_NEEDS_SCHEDULING)]
+    cbnz   w3, 10b
+
+    /* Clear the previous thread. */
+    str    xzr, [x20, #(KSCHEDULER_PREVIOUS_THREAD)]
+
+    /* Wait for an interrupt and check again. */
     wfi
 
     msr    daifclr, #2
     msr    daifset, #2
 
-    b      12b
+    b      17b
 
-13: /* We need scheduling again! */
-    /* Check whether the interrupt task thread needs to be set runnable. */
-    ldrb   w3, [x20, #1]
-    cbz    w3, 4b
-
-    /* It does, so do so. We're using the idle thread stack so no register state preserve needed. */
-    bl     _ZN3ams4kern10KScheduler29InterruptTaskThreadToRunnableEv
+18: /* We have interrupt tasks to execute! */
+    /* Execute any pending interrupt tasks. */
+    ldr    x0, [x20, #(KSCHEDULER_INTERRUPT_TASK_MANAGER)]
+    bl     _ZN3ams4kern21KInterruptTaskManager7DoTasksEv
 
     /* Clear the interrupt task thread as runnable. */
-    strb   wzr, [x20, #1]
+    strb   wzr, [x20, #(KSCHEDULER_INTERRUPT_TASK_RUNNABLE)]
 
     /* Retry the scheduling loop. */
-    b      4b
+    b      10b

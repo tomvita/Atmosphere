@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,8 +18,12 @@
 #include <vapours.hpp>
 #include <stratosphere/os/os_condition_variable_common.hpp>
 
-#if defined(ATMOSPHERE_OS_HORIZON)
+#if defined(AMS_OS_IMPL_USE_PTHREADS)
+    #include <stratosphere/os/impl/os_internal_condition_variable_impl.pthread.hpp>
+#elif defined(ATMOSPHERE_OS_HORIZON)
     #include <stratosphere/os/impl/os_internal_condition_variable_impl.os.horizon.hpp>
+#elif defined(ATMOSPHERE_OS_WINDOWS)
+    #include <stratosphere/os/impl/os_internal_condition_variable_impl.os.windows.hpp>
 #else
     #error "Unknown OS for ams::os::impl::InternalConditionVariableImpl"
 #endif
@@ -28,31 +32,35 @@ namespace ams::os::impl {
 
     class InternalConditionVariable {
         private:
-            InternalConditionVariableImpl impl;
+            InternalConditionVariableImpl m_impl;
         public:
-            constexpr InternalConditionVariable() : impl() { /* ... */ }
+            constexpr InternalConditionVariable() : m_impl() { /* ... */ }
 
-            constexpr void Initialize() {
-                this->impl.Initialize();
+            void Initialize() {
+                m_impl.Initialize();
+            }
+
+            void Finalize() {
+                m_impl.Finalize();
             }
 
             void Signal() {
-                this->impl.Signal();
+                m_impl.Signal();
             }
 
             void Broadcast() {
-                this->impl.Broadcast();
+                m_impl.Broadcast();
             }
 
             void Wait(InternalCriticalSection *cs) {
-                this->impl.Wait(cs);
+                m_impl.Wait(cs);
             }
 
             ConditionVariableStatus TimedWait(InternalCriticalSection *cs, const TimeoutHelper &timeout_helper) {
-                return this->impl.TimedWait(cs, timeout_helper);
+                return m_impl.TimedWait(cs, timeout_helper);
             }
     };
 
-    using InternalConditionVariableStorage = TYPED_STORAGE(InternalConditionVariable);
+    using InternalConditionVariableStorage = util::TypedStorage<InternalConditionVariable>;
 
 }

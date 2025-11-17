@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,6 +15,11 @@
  */
 #pragma once
 #include <vapours.hpp>
+#include <stratosphere/os/os_common_config.hpp>
+
+#if defined(AMS_OS_IMPL_USE_PTHREADS)
+#include <pthread.h>
+#endif
 
 namespace ams::os {
 
@@ -43,16 +48,6 @@ namespace ams::os {
     inline constexpr const ProcessId ProcessId::Invalid = {static_cast<u64>(-1ull)};
 
     inline constexpr const ProcessId InvalidProcessId = ProcessId::Invalid;
-
-    NX_INLINE Result TryGetProcessId(os::ProcessId *out, ::Handle process_handle) {
-        return svcGetProcessId(&out->value, process_handle);
-    }
-
-    NX_INLINE os::ProcessId GetProcessId(::Handle process_handle) {
-        os::ProcessId process_id;
-        R_ABORT_UNLESS(TryGetProcessId(&process_id, process_handle));
-        return process_id;
-    }
 
     inline constexpr bool operator==(const ProcessId &lhs, const ProcessId &rhs) {
         return lhs.value == rhs.value;

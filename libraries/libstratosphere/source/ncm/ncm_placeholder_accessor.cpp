@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Adubbz, Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -30,7 +30,7 @@ namespace ams::ncm {
         constexpr inline size_t PlaceHolderFileNameLength = PlaceHolderFileNameLengthWithoutExtension + PlaceHolderExtensionLength;
 
         void MakeBasePlaceHolderDirectoryPath(PathString *out, const char *root_path) {
-            out->SetFormat("%s%s", root_path, BasePlaceHolderDirectory);
+            out->AssignFormat("%s%s", root_path, BasePlaceHolderDirectory);
         }
 
         void MakePlaceHolderFilePath(PathString *out, PlaceHolderId id, MakePlaceHolderPathFunction func, const char *root_path) {
@@ -39,17 +39,10 @@ namespace ams::ncm {
             func(out, id, path);
         }
 
-        ALWAYS_INLINE Result ConvertNotFoundResult(Result r) {
-            R_TRY_CATCH(r) {
-                R_CONVERT(ams::fs::ResultPathNotFound, ncm::ResultPlaceHolderNotFound())
-            } R_END_TRY_CATCH;
-            return ResultSuccess();
-        }
-
     }
 
     void PlaceHolderAccessor::MakePath(PathString *out_placeholder_path, PlaceHolderId placeholder_id) const {
-        MakePlaceHolderFilePath(out_placeholder_path, placeholder_id, this->make_placeholder_path_func, *this->root_path);
+        MakePlaceHolderFilePath(out_placeholder_path, placeholder_id, m_make_placeholder_path_func, *m_root_path);
     }
 
     void PlaceHolderAccessor::MakeBaseDirectoryPath(PathString *out, const char *root_path) {
@@ -59,7 +52,7 @@ namespace ams::ncm {
     Result PlaceHolderAccessor::EnsurePlaceHolderDirectory(PlaceHolderId placeholder_id) {
         PathString path;
         this->MakePath(std::addressof(path), placeholder_id);
-        return fs::EnsureParentDirectoryRecursively(path);
+        R_RETURN(fs::EnsureParentDirectory(path));
     }
 
     Result PlaceHolderAccessor::GetPlaceHolderIdFromFileName(PlaceHolderId *out, const char *name) {
@@ -71,7 +64,7 @@ namespace ams::ncm {
         PlaceHolderId placeholder_id = {};
         for (size_t i = 0; i < sizeof(placeholder_id); i++) {
             char tmp[3];
-            strlcpy(tmp, name + i * 2, sizeof(tmp));
+            util::Strlcpy(tmp, name + i * 2, sizeof(tmp));
 
             char *err = nullptr;
             reinterpret_cast<u8 *>(std::addressof(placeholder_id))[i] = static_cast<u8>(std::strtoul(tmp, std::addressof(err), 16));
@@ -79,7 +72,7 @@ namespace ams::ncm {
         }
 
         *out = placeholder_id;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result PlaceHolderAccessor::Open(fs::FileHandle *out_handle, PlaceHolderId placeholder_id) {
@@ -91,11 +84,11 @@ namespace ams::ncm {
         this->MakePath(std::addressof(placeholder_path), placeholder_id);
 
         /* Open the placeholder file. */
-        return fs::OpenFile(out_handle, placeholder_path, fs::OpenMode_Write);
+        R_RETURN(fs::OpenFile(out_handle, placeholder_path, fs::OpenMode_Write));
     }
 
     bool PlaceHolderAccessor::LoadFromCache(fs::FileHandle *out_handle, PlaceHolderId placeholder_id) {
-        std::scoped_lock lk(this->cache_mutex);
+        std::scoped_lock lk(m_cache_mutex);
 
         /* Attempt to find an entry in the cache. */
         CacheEntry *entry = this->FindInCache(placeholder_id);
@@ -110,13 +103,13 @@ namespace ams::ncm {
     }
 
     void PlaceHolderAccessor::StoreToCache(PlaceHolderId placeholder_id, fs::FileHandle handle) {
-        std::scoped_lock lk(this->cache_mutex);
+        std::scoped_lock lk(m_cache_mutex);
 
         /* Store placeholder id and file handle to a free entry. */
         CacheEntry *entry = this->GetFreeEntry();
         entry->id      = placeholder_id;
         entry->handle  = handle;
-        entry->counter = this->cur_counter++;
+        entry->counter = m_cur_counter++;
     }
 
     void PlaceHolderAccessor::Invalidate(CacheEntry *entry) {
@@ -136,8 +129,8 @@ namespace ams::ncm {
 
         /* Attempt to find a cache entry with the same placeholder id. */
         for (size_t i = 0; i < MaxCacheEntries; i++) {
-            if (placeholder_id == this->caches[i].id) {
-                return &this->caches[i];
+            if (placeholder_id == m_caches[i].id) {
+                return std::addressof(m_caches[i]);
             }
         }
         return nullptr;
@@ -146,16 +139,16 @@ namespace ams::ncm {
     PlaceHolderAccessor::CacheEntry *PlaceHolderAccessor::GetFreeEntry() {
         /* Try to find an already free entry. */
         for (size_t i = 0; i < MaxCacheEntries; i++) {
-            if (this->caches[i].id == InvalidPlaceHolderId) {
-                return std::addressof(this->caches[i]);
+            if (m_caches[i].id == InvalidPlaceHolderId) {
+                return std::addressof(m_caches[i]);
             }
         }
 
         /* Get the oldest entry. */
-        CacheEntry *entry = std::addressof(this->caches[0]);
+        CacheEntry *entry = std::addressof(m_caches[0]);
         for (size_t i = 1; i < MaxCacheEntries; i++) {
-            if (entry->counter < this->caches[i].counter) {
-                entry = std::addressof(this->caches[i]);
+            if (entry->counter < m_caches[i].counter) {
+                entry = std::addressof(m_caches[i]);
             }
         }
         this->Invalidate(entry);
@@ -164,7 +157,7 @@ namespace ams::ncm {
 
     void PlaceHolderAccessor::GetPath(PathString *placeholder_path, PlaceHolderId placeholder_id) {
         {
-            std::scoped_lock lock(this->cache_mutex);
+            std::scoped_lock lock(m_cache_mutex);
             this->Invalidate(this->FindInCache(placeholder_id));
         }
         this->MakePath(placeholder_path, placeholder_id);
@@ -183,7 +176,7 @@ namespace ams::ncm {
             R_CONVERT(fs::ResultPathAlreadyExists, ncm::ResultPlaceHolderAlreadyExists())
         } R_END_TRY_CATCH;
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result PlaceHolderAccessor::DeletePlaceHolderFile(PlaceHolderId placeholder_id) {
@@ -196,7 +189,7 @@ namespace ams::ncm {
             R_CONVERT(fs::ResultPathNotFound, ncm::ResultPlaceHolderNotFound())
         } R_END_TRY_CATCH;
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result PlaceHolderAccessor::WritePlaceHolderFile(PlaceHolderId placeholder_id, s64 offset, const void *buffer, size_t size) {
@@ -210,7 +203,7 @@ namespace ams::ncm {
         ON_SCOPE_EXIT { this->StoreToCache(placeholder_id, file); };
 
         /* Write data to the placeholder file. */
-        return fs::WriteFile(file, offset, buffer, size, this->delay_flush ? fs::WriteOption::Flush : fs::WriteOption::None);
+        R_RETURN(fs::WriteFile(file, offset, buffer, size, m_delay_flush ? fs::WriteOption::Flush : fs::WriteOption::None));
     }
 
     Result PlaceHolderAccessor::SetPlaceHolderFileSize(PlaceHolderId placeholder_id, s64 size) {
@@ -224,7 +217,7 @@ namespace ams::ncm {
         ON_SCOPE_EXIT { fs::CloseFile(file); };
 
         /* Set the size of the placeholder file. */
-        return fs::SetFileSize(file, size);
+        R_RETURN(fs::SetFileSize(file, size));
     }
 
     Result PlaceHolderAccessor::TryGetPlaceHolderFileSize(bool *found_in_cache, s64 *out_size, PlaceHolderId placeholder_id) {
@@ -241,12 +234,12 @@ namespace ams::ncm {
             *found_in_cache = false;
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     void PlaceHolderAccessor::InvalidateAll() {
         /* Invalidate all cache entries. */
-        for (auto &entry : this->caches) {
+        for (auto &entry : m_caches) {
             if (entry.id != InvalidPlaceHolderId) {
                 this->Invalidate(std::addressof(entry));
             }

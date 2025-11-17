@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -21,40 +21,33 @@ namespace ams::mitm::sysupdater {
 
     class ErrorContextHolder {
         private:
-            err::ErrorContext error_context;
+            err::ErrorContext m_error_context;
         public:
-            constexpr ErrorContextHolder() : error_context{} { /* ... */ }
+            constexpr ErrorContextHolder() : m_error_context{} { /* ... */ }
 
             virtual ~ErrorContextHolder() { /* ... */ }
 
             template<typename T>
             Result SaveErrorContextIfFailed(T &async, Result result) {
-                if (R_FAILED(result)) {
-                    async.GetErrorContext(std::addressof(this->error_context));
-                    return result;
-                }
+                ON_RESULT_FAILURE { async.GetErrorContext(std::addressof(m_error_context)); };
 
-                return ResultSuccess();
+                R_RETURN(result);
             }
 
             template<typename T>
             Result GetAndSaveErrorContext(T &async) {
-                R_TRY(this->SaveErrorContextIfFailed(async, async.Get()));
-                return ResultSuccess();
+                R_RETURN(this->SaveErrorContextIfFailed(async, async.Get()));
             }
 
             template<typename T>
             Result SaveInternalTaskErrorContextIfFailed(T &async, Result result) {
-                if (R_FAILED(result)) {
-                    async.CreateErrorContext(std::addressof(this->error_context));
-                    return result;
-                }
+                ON_RESULT_FAILURE { async.CreateErrorContext(std::addressof(m_error_context)); };
 
-                return ResultSuccess();
+                R_RETURN(result);
             }
 
             const err::ErrorContext &GetErrorContextImpl() {
-                return this->error_context;
+                return m_error_context;
             }
     };
 
@@ -66,12 +59,12 @@ namespace ams::mitm::sysupdater {
 
             Result Cancel() {
                 this->CancelImpl();
-                return ResultSuccess();
+                R_SUCCEED();
             }
 
             virtual Result GetErrorContext(sf::Out<err::ErrorContext> out) {
                 *out = {};
-                return ResultSuccess();
+                R_SUCCEED();
             }
         private:
             virtual void CancelImpl() = 0;
@@ -82,7 +75,7 @@ namespace ams::mitm::sysupdater {
             virtual ~AsyncResultBase() { /* ... */ }
 
             Result Get() {
-                return ToAsyncResult(this->GetImpl());
+                R_RETURN(ToAsyncResult(this->GetImpl()));
             }
         private:
             virtual Result GetImpl() = 0;
@@ -93,19 +86,19 @@ namespace ams::mitm::sysupdater {
     /* We don't implement the RequestServer::ManagedStop details, as we don't implement stoppable request list. */
     class AsyncPrepareSdCardUpdateImpl : public AsyncResultBase, private ErrorContextHolder {
         private:
-            Result result;
-            os::SystemEvent event;
-            std::optional<ThreadInfo> thread_info;
-            ncm::InstallTaskBase *task;
+            Result m_result;
+            os::SystemEvent m_event;
+            util::optional<ThreadInfo> m_thread_info;
+            ncm::InstallTaskBase *m_task;
         public:
-            AsyncPrepareSdCardUpdateImpl(ncm::InstallTaskBase *task) : result(ResultSuccess()), event(os::EventClearMode_ManualClear, true), thread_info(), task(task) { /* ... */ }
+            AsyncPrepareSdCardUpdateImpl(ncm::InstallTaskBase *task) : m_result(ResultSuccess()), m_event(os::EventClearMode_ManualClear, true), m_thread_info(), m_task(task) { /* ... */ }
             virtual ~AsyncPrepareSdCardUpdateImpl();
 
-            os::SystemEvent &GetEvent() { return this->event; }
+            os::SystemEvent &GetEvent() { return m_event; }
 
             virtual Result GetErrorContext(sf::Out<err::ErrorContext> out) override {
                 *out = ErrorContextHolder::GetErrorContextImpl();
-                return ResultSuccess();
+                R_SUCCEED();
             }
 
             Result Run();
@@ -113,7 +106,7 @@ namespace ams::mitm::sysupdater {
             Result Execute();
 
             virtual void CancelImpl() override;
-            virtual Result GetImpl() override { return this->result; }
+            virtual Result GetImpl() override { return m_result; }
     };
 
 }

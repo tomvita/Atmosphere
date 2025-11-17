@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -29,6 +29,8 @@ namespace ams::pm::shell {
     Result GetProcessEventInfo(ProcessEventInfo *out);
     Result GetApplicationProcessIdForShell(os::ProcessId *out);
     Result BoostSystemMemoryResourceLimit(u64 size);
-    Result EnableApplicationExtraThread();
+    Result BoostApplicationThreadResourceLimit();
+    Result BoostSystemThreadResourceLimit();
+    Result GetProcessId(os::ProcessId *out_process_id, const ncm::ProgramId program_id);
 
 }

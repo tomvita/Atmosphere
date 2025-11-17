@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -14,10 +14,11 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #pragma once
-#include "fs_common.hpp"
+#include <stratosphere/fs/fs_common.hpp>
 
 namespace ams::fs {
 
+    /* ACCURATE_TO_VERSION: Unknown */
     using SaveDataId           = u64;
     using SystemSaveDataId     = u64;
     using SystemBcatSaveDataId = SystemSaveDataId;
@@ -81,6 +82,20 @@ namespace ams::fs {
         SaveDataFlags_KeepAfterResettingSystemSaveDataWithoutUserSaveData = (1 << 2),
         SaveDataFlags_NeedsSecureDelete                                   = (1 << 3),
     };
+
+    enum class SaveDataMetaType : u8 {
+        None             = 0,
+        Thumbnail        = 1,
+        ExtensionContext = 2,
+    };
+
+    struct SaveDataMetaInfo {
+        u32 size;
+        SaveDataMetaType type;
+        u8 reserved[0xB];
+    };
+    static_assert(util::is_pod<SaveDataMetaInfo>::value);
+    static_assert(sizeof(SaveDataMetaInfo) == 0x10);
 
     struct SaveDataCreationInfo {
         s64 size;
@@ -164,6 +179,6 @@ namespace ams::fs {
     static_assert(util::is_pod<HashSalt>::value);
     static_assert(sizeof(HashSalt) == HashSalt::Size);
 
-    using SaveDataHashSalt = std::optional<HashSalt>;
+    using SaveDataHashSalt = util::optional<HashSalt>;
 
 }

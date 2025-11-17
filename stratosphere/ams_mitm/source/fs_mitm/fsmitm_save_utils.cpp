@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -44,10 +44,10 @@ namespace ams::mitm::fs {
                     *out_str = "safe";
                     break;
                 default:
-                    return fs::ResultInvalidSaveDataSpaceId();
+                    R_THROW(fs::ResultInvalidSaveDataSpaceId());
             }
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         Result GetSaveDataTypeString(const char **out_str, SaveDataType save_data_type) {
@@ -75,10 +75,10 @@ namespace ams::mitm::fs {
                     break;
                 default:
                     /* TODO: Better result? */
-                    return fs::ResultInvalidArgument();
+                    R_THROW(fs::ResultInvalidArgument());
             }
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         constexpr inline bool IsEmptyAccountId(const UserId &uid) {
@@ -101,14 +101,14 @@ namespace ams::mitm::fs {
         const bool is_system = attribute.system_save_data_id != InvalidSystemSaveDataId && IsEmptyAccountId(attribute.user_id);
         size_t out_path_len;
         if (is_system) {
-            out_path_len = static_cast<size_t>(std::snprintf(dst, dst_size, "/atmosphere/saves/%s/%s/%s/%016lx", emummc_str, space_id_str, save_type_str, attribute.system_save_data_id));
+            out_path_len = static_cast<size_t>(util::SNPrintf(dst, dst_size, "/atmosphere/saves/%s/%s/%s/%016lx", emummc_str, space_id_str, save_type_str, attribute.system_save_data_id));
         } else {
-            out_path_len = static_cast<size_t>(std::snprintf(dst, dst_size, "/atmosphere/saves/%s/%s/%s/%016lx/%016lx%016lx", emummc_str, space_id_str, save_type_str, static_cast<u64>(program_id), attribute.user_id.data[1], attribute.user_id.data[0]));
+            out_path_len = static_cast<size_t>(util::SNPrintf(dst, dst_size, "/atmosphere/saves/%s/%s/%s/%016lx/%016lx%016lx", emummc_str, space_id_str, save_type_str, static_cast<u64>(program_id), attribute.user_id.data[1], attribute.user_id.data[0]));
         }
 
         R_UNLESS(out_path_len < dst_size, fs::ResultTooLongPath());
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
 }

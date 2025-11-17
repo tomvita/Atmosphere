@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -30,14 +30,14 @@ namespace ams::fssystem {
         const auto entry_storage_offset = node_storage_offset + node_storage_size;
 
         /* Initialize. */
-        return this->Initialize(allocator, fs::SubStorage(std::addressof(table_storage), node_storage_offset, node_storage_size), fs::SubStorage(std::addressof(table_storage), entry_storage_offset, entry_storage_size), header.entry_count);
+        R_RETURN(this->Initialize(allocator, fs::SubStorage(std::addressof(table_storage), node_storage_offset, node_storage_size), fs::SubStorage(std::addressof(table_storage), entry_storage_offset, entry_storage_size), header.entry_count));
     }
 
     void IndirectStorage::Finalize() {
         if (this->IsInitialized()) {
-            this->table.Finalize();
+            m_table.Finalize();
             for (auto i = 0; i < StorageCount; i++) {
-                this->data_storage[i] = fs::SubStorage();
+                m_data_storage[i] = fs::SubStorage();
             }
         }
     }
@@ -59,14 +59,17 @@ namespace ams::fssystem {
         R_UNLESS(out_entries != nullptr || entry_count == 0, fs::ResultNullptrArgument());
 
         /* Check that our range is valid. */
-        R_UNLESS(this->table.Includes(offset, size), fs::ResultOutOfRange());
+        BucketTree::Offsets table_offsets;
+        R_TRY(m_table.GetOffsets(std::addressof(table_offsets)));
+
+        R_UNLESS(table_offsets.IsInclude(offset, size), fs::ResultOutOfRange());
 
         /* Find the offset in our tree. */
         BucketTree::Visitor visitor;
-        R_TRY(this->table.Find(std::addressof(visitor), offset));
+        R_TRY(m_table.Find(std::addressof(visitor), offset));
         {
             const auto entry_offset = visitor.Get<Entry>()->GetVirtualOffset();
-            R_UNLESS(0 <= entry_offset && this->table.Includes(entry_offset), fs::ResultInvalidIndirectEntryOffset());
+            R_UNLESS(0 <= entry_offset && table_offsets.IsInclude(entry_offset), fs::ResultInvalidIndirectEntryOffset());
         }
 
         /* Prepare to loop over entries. */
@@ -75,7 +78,7 @@ namespace ams::fssystem {
 
         auto cur_entry = *visitor.Get<Entry>();
         while (cur_entry.GetVirtualOffset() < end_offset) {
-            /* Try to write the entry to the out list */
+            /* Try to write the entry to the out list. */
             if (entry_count != 0) {
                 if (count >= entry_count) {
                     break;
@@ -96,7 +99,7 @@ namespace ams::fssystem {
 
         /* Write the output count. */
         *out_entry_count = count;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result IndirectStorage::Read(s64 offset, void *buffer, size_t size) {
@@ -110,34 +113,33 @@ namespace ams::fssystem {
         /* Ensure that we have a buffer to read to. */
         R_UNLESS(buffer != nullptr, fs::ResultNullptrArgument());
 
-        R_TRY(this->OperatePerEntry<true>(offset, size, [=](fs::IStorage *storage, s64 data_offset, s64 cur_offset, s64 cur_size) -> Result {
+        R_TRY((this->OperatePerEntry<true, true>(offset, size, [=](fs::IStorage *storage, s64 data_offset, s64 cur_offset, s64 cur_size) -> Result {
             R_TRY(storage->Read(data_offset, reinterpret_cast<u8 *>(buffer) + (cur_offset - offset), static_cast<size_t>(cur_size)));
-            return ResultSuccess();
-        }));
+            R_SUCCEED();
+        })));
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result IndirectStorage::OperateRange(void *dst, size_t dst_size, fs::OperationId op_id, s64 offset, s64 size, const void *src, size_t src_size) {
-        switch (op_id) {
-            case fs::OperationId::InvalidateCache:
-                {
-                    if (size > 0) {
-                        /* Validate arguments. */
-                        R_UNLESS(this->table.Includes(offset, size), fs::ResultOutOfRange());
-                        if (!this->table.IsEmpty()) {
-                            /* Invalidate our table's cache. */
-                            R_TRY(this->table.InvalidateCache());
+        /* Validate pre-conditions. */
+        AMS_ASSERT(offset >= 0);
+        AMS_ASSERT(size >= 0);
+        AMS_ASSERT(this->IsInitialized());
 
-                            /* Operate on our entries. */
-                            R_TRY(this->OperatePerEntry<false>(offset, size,  [=](fs::IStorage *storage, s64 data_offset, s64 cur_offset, s64 cur_size) -> Result {
-                                R_TRY(storage->OperateRange(dst, dst_size, op_id, data_offset, cur_size, src, src_size));
-                                return ResultSuccess();
-                            }));
+        switch (op_id) {
+            case fs::OperationId::Invalidate:
+                {
+                    if (!m_table.IsEmpty()) {
+                        /* Invalidate our table's cache. */
+                        R_TRY(m_table.InvalidateCache());
+
+                        /* Invalidate our storages. */
+                        for (auto &storage : m_data_storage) {
+                            R_TRY(storage.OperateRange(fs::OperationId::Invalidate, 0, std::numeric_limits<s64>::max()));
                         }
-                        return ResultSuccess();
                     }
-                    return ResultSuccess();
+                    R_SUCCEED();
                 }
             case fs::OperationId::QueryRange:
                 {
@@ -147,31 +149,37 @@ namespace ams::fssystem {
 
                     if (size > 0) {
                         /* Validate arguments. */
-                        R_UNLESS(this->table.Includes(offset, size), fs::ResultOutOfRange());
-                        if (!this->table.IsEmpty()) {
+                        BucketTree::Offsets table_offsets;
+                        R_TRY(m_table.GetOffsets(std::addressof(table_offsets)));
+
+                        R_UNLESS(table_offsets.IsInclude(offset, size), fs::ResultOutOfRange());
+
+                        if (!m_table.IsEmpty()) {
                             /* Create a new info. */
                             fs::QueryRangeInfo merged_info;
                             merged_info.Clear();
 
                             /* Operate on our entries. */
-                            R_TRY(this->OperatePerEntry<false>(offset, size,  [=, &merged_info](fs::IStorage *storage, s64 data_offset, s64 cur_offset, s64 cur_size) -> Result {
+                            R_TRY((this->OperatePerEntry<false, true>(offset, size,  [=, &merged_info](fs::IStorage *storage, s64 data_offset, s64 cur_offset, s64 cur_size) -> Result {
+                                AMS_UNUSED(cur_offset);
+
                                 fs::QueryRangeInfo cur_info;
                                 R_TRY(storage->OperateRange(std::addressof(cur_info), sizeof(cur_info), op_id, data_offset, cur_size, src, src_size));
                                 merged_info.Merge(cur_info);
-                                return ResultSuccess();
-                            }));
+                                R_SUCCEED();
+                            })));
 
                             /* Write the merged info. */
                             *reinterpret_cast<fs::QueryRangeInfo *>(dst) = merged_info;
                         }
                     }
-                    return ResultSuccess();
+                    R_SUCCEED();
                 }
             default:
-                return fs::ResultUnsupportedOperationInIndirectStorageC();
+                R_THROW(fs::ResultUnsupportedOperateRangeForIndirectStorage());
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
 }

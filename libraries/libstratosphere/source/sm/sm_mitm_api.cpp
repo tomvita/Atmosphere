@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,47 +18,41 @@
 
 namespace ams::sm::mitm {
 
+    #if defined(ATMOSPHERE_OS_HORIZON)
+    #if AMS_SF_MITM_SUPPORTED
     /* Mitm API. */
-    Result InstallMitm(Handle *out_port, Handle *out_query, ServiceName name) {
-        return impl::DoWithPerThreadSession([&](Service *fwd) {
-            return smAtmosphereMitmInstall(fwd, out_port, out_query, impl::ConvertName(name));
-        });
+    Result InstallMitm(os::NativeHandle *out_port, os::NativeHandle *out_query, ServiceName name) {
+        R_RETURN(impl::DoWithPerThreadSession([&](TipcService *fwd) {
+            R_RETURN(smAtmosphereMitmInstall(fwd, out_port, out_query, impl::ConvertName(name)));
+        }));
     }
 
     Result UninstallMitm(ServiceName name) {
-        return impl::DoWithUserSession([&]() {
-            return smAtmosphereMitmUninstall(impl::ConvertName(name));
-        });
+        R_RETURN(smAtmosphereMitmUninstall(impl::ConvertName(name)));
     }
 
     Result DeclareFutureMitm(ServiceName name) {
-        return impl::DoWithUserSession([&]() {
-            return smAtmosphereMitmDeclareFuture(impl::ConvertName(name));
-        });
+        R_RETURN(smAtmosphereMitmDeclareFuture(impl::ConvertName(name)));
     }
 
     Result ClearFutureMitm(ServiceName name) {
-        return impl::DoWithUserSession([&]() {
-            return smAtmosphereMitmClearFuture(impl::ConvertName(name));
-        });
+        R_RETURN(smAtmosphereMitmClearFuture(impl::ConvertName(name)));
     }
 
     Result AcknowledgeSession(Service *out_service, MitmProcessInfo *out_info, ServiceName name) {
         return impl::DoWithMitmAcknowledgementSession([&]() {
-            return smAtmosphereMitmAcknowledgeSession(out_service, reinterpret_cast<void *>(out_info), impl::ConvertName(name));
+            R_RETURN(smAtmosphereMitmAcknowledgeSession(out_service, reinterpret_cast<void *>(out_info), impl::ConvertName(name)));
         });
     }
 
     Result HasMitm(bool *out, ServiceName name) {
-        return impl::DoWithUserSession([&]() {
-            return smAtmosphereHasMitm(out, impl::ConvertName(name));
-        });
+        R_RETURN(smAtmosphereHasMitm(out, impl::ConvertName(name)));
     }
 
     Result WaitMitm(ServiceName name) {
-        return impl::DoWithUserSession([&]() {
-            return smAtmosphereWaitMitm(impl::ConvertName(name));
-        });
+        R_RETURN(smAtmosphereWaitMitm(impl::ConvertName(name)));
     }
+    #endif
+    #endif
 
 }

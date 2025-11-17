@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -22,6 +22,7 @@ namespace ams::secmon::smc {
     enum EsCommonKeyType {
         EsCommonKeyType_TitleKey   = 0,
         EsCommonKeyType_ArchiveKey = 1,
+        EsCommonKeyType_Unknown2   = 2,
 
         EsCommonKeyType_Count,
     };

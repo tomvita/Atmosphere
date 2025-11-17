@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -20,6 +20,7 @@
 
 namespace ams::fs::impl {
 
+    /* ACCURATE_TO_VERSION: Unknown */
     enum TlsIoPriority : u8 {
         TlsIoPriority_Normal     = 0,
         TlsIoPriority_Realtime   = 1,
@@ -27,11 +28,13 @@ namespace ams::fs::impl {
         TlsIoPriority_Background = 3,
     };
 
+    #if defined(ATMOSPHERE_OS_HORIZON)
     /* Ensure that TlsIo priority matches libnx priority. */
     static_assert(TlsIoPriority_Normal     == static_cast<TlsIoPriority>(::FsPriority_Normal));
     static_assert(TlsIoPriority_Realtime   == static_cast<TlsIoPriority>(::FsPriority_Realtime));
     static_assert(TlsIoPriority_Low        == static_cast<TlsIoPriority>(::FsPriority_Low));
     static_assert(TlsIoPriority_Background == static_cast<TlsIoPriority>(::FsPriority_Background));
+    #endif
 
     constexpr inline Result ConvertFsPriorityToTlsIoPriority(u8 *out, PriorityRaw priority) {
         AMS_ASSERT(out != nullptr);
@@ -41,10 +44,10 @@ namespace ams::fs::impl {
             case PriorityRaw_Realtime:   *out = TlsIoPriority_Realtime;   break;
             case PriorityRaw_Low:        *out = TlsIoPriority_Low;        break;
             case PriorityRaw_Background: *out = TlsIoPriority_Background; break;
-            default: return fs::ResultInvalidArgument();
+            default: R_THROW(fs::ResultInvalidArgument());
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     constexpr inline Result ConvertTlsIoPriorityToFsPriority(PriorityRaw *out, u8 tls_io) {
@@ -55,10 +58,10 @@ namespace ams::fs::impl {
             case TlsIoPriority_Realtime:   *out = PriorityRaw_Realtime;   break;
             case TlsIoPriority_Low:        *out = PriorityRaw_Low;        break;
             case TlsIoPriority_Background: *out = PriorityRaw_Background; break;
-            default: return fs::ResultInvalidArgument();
+            default: R_THROW(fs::ResultInvalidArgument());
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     inline u8 GetTlsIoPriority(os::ThreadType *thread) {

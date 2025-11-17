@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -16,6 +16,7 @@
 #pragma once
 #include <vapours.hpp>
 #include <stratosphere/os.hpp>
+#include <stratosphere/fs/fs_i_buffer_manager.hpp>
 
 namespace ams::fssystem::buffers {
 
@@ -25,6 +26,7 @@ namespace ams::fssystem::buffers {
 
     }
 
+    /* ACCURATE_TO_VERSION: Unknown */
     template<typename F, typename OnFailure>
     Result DoContinuouslyUntilBufferIsAllocated(F f, OnFailure on_failure, const char *function_name) {
         constexpr auto BufferAllocationRetryLogCountMax = 10;
@@ -34,6 +36,7 @@ namespace ams::fssystem::buffers {
                 R_CATCH(fs::ResultBufferAllocationFailed) {
                     if ((1 <= count && count <= BufferAllocationRetryLogCountMax) || ((count % BufferAllocationRetryLogInterval) == 0)) {
                         /* TODO: Log */
+                        AMS_UNUSED(function_name);
                     }
                     R_TRY(on_failure());
 
@@ -43,57 +46,60 @@ namespace ams::fssystem::buffers {
                 }
             } R_END_TRY_CATCH;
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
     }
 
     template<typename F>
     Result DoContinuouslyUntilBufferIsAllocated(F f, const char *function_name) {
-        R_TRY(DoContinuouslyUntilBufferIsAllocated(f, []() ALWAYS_INLINE_LAMBDA { return ResultSuccess(); }, function_name));
-        return ResultSuccess();
+        R_TRY(DoContinuouslyUntilBufferIsAllocated(f, []() ALWAYS_INLINE_LAMBDA { R_SUCCEED(); }, function_name));
+        R_SUCCEED();
     }
 
+    /* ACCURATE_TO_VERSION: Unknown */
     class BufferManagerContext {
         private:
-            bool needs_blocking;
+            bool m_needs_blocking;
         public:
-            constexpr BufferManagerContext() : needs_blocking(false) { /* ... */ }
+            constexpr BufferManagerContext() : m_needs_blocking(false) { /* ... */ }
         public:
-            bool IsNeedBlocking() const { return this->needs_blocking; }
+            bool IsNeedBlocking() const { return m_needs_blocking; }
 
-            void SetNeedBlocking(bool need) { this->needs_blocking = need; }
+            void SetNeedBlocking(bool need) { m_needs_blocking = need; }
     };
 
     void RegisterBufferManagerContext(const BufferManagerContext *context);
     BufferManagerContext *GetBufferManagerContext();
     void EnableBlockingBufferManagerAllocation();
 
+    /* ACCURATE_TO_VERSION: Unknown */
     class ScopedBufferManagerContextRegistration {
         private:
-            BufferManagerContext cur_context;
-            const BufferManagerContext *old_context;
+            BufferManagerContext m_cur_context;
+            const BufferManagerContext *m_old_context;
         public:
             ALWAYS_INLINE explicit ScopedBufferManagerContextRegistration() {
-                this->old_context = GetBufferManagerContext();
-                if (this->old_context != nullptr) {
-                    this->cur_context = *this->old_context;
+                m_old_context = GetBufferManagerContext();
+                if (m_old_context != nullptr) {
+                    m_cur_context = *m_old_context;
                 }
-                RegisterBufferManagerContext(std::addressof(this->cur_context));
+                RegisterBufferManagerContext(std::addressof(m_cur_context));
             }
 
             ALWAYS_INLINE ~ScopedBufferManagerContextRegistration() {
-                RegisterBufferManagerContext(this->old_context);
+                RegisterBufferManagerContext(m_old_context);
             }
     };
 
+    /* ACCURATE_TO_VERSION: Unknown */
     template<typename IsValidBufferFunction>
-    Result AllocateBufferUsingBufferManagerContext(std::pair<uintptr_t, size_t> *out, fssystem::IBufferManager *buffer_manager, size_t size, const IBufferManager::BufferAttribute attribute, IsValidBufferFunction is_valid_buffer, const char *func_name) {
+    Result AllocateBufferUsingBufferManagerContext(fs::IBufferManager::MemoryRange *out, fs::IBufferManager *buffer_manager, size_t size, const fs::IBufferManager::BufferAttribute attribute, IsValidBufferFunction is_valid_buffer, const char *func_name) {
         AMS_ASSERT(out != nullptr);
         AMS_ASSERT(buffer_manager != nullptr);
         AMS_ASSERT(func_name != nullptr);
 
         /* Clear the output. */
-        *out = std::pair<uintptr_t, size_t>(0, 0);
+        *out = fs::IBufferManager::MakeMemoryRange(0, 0);
 
         /* Get the context. */
         auto context = GetBufferManagerContext();
@@ -104,10 +110,10 @@ namespace ams::fssystem::buffers {
                 if (buffer.first != 0) {
                     buffer_manager->DeallocateBuffer(buffer.first, buffer.second);
                 }
-                return fs::ResultBufferAllocationFailed();
+                R_THROW(fs::ResultBufferAllocationFailed());
             }
             *out = buffer;
-            return ResultSuccess();
+            R_SUCCEED();
         };
 
         if (context == nullptr || !context->IsNeedBlocking()) {
@@ -119,7 +125,7 @@ namespace ams::fssystem::buffers {
         }
 
         AMS_ASSERT(out->first != 0);
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
 }

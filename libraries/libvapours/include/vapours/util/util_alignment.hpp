@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -43,33 +43,38 @@ namespace ams::util {
         return (value & invmask) == 0;
     }
 
+    template<typename T> requires std::unsigned_integral<T>
+    constexpr ALWAYS_INLINE T GetAlignment(T value) {
+        return value & -value;
+    }
+
     template<>
-    constexpr ALWAYS_INLINE void *AlignUp<void *>(void *value, size_t alignment) {
+    ALWAYS_INLINE void *AlignUp<void *>(void *value, size_t alignment) {
         return reinterpret_cast<void *>(AlignUp(reinterpret_cast<uintptr_t>(value), alignment));
     }
 
     template<>
-    constexpr ALWAYS_INLINE const void *AlignUp<const void *>(const void *value, size_t alignment) {
+    ALWAYS_INLINE const void *AlignUp<const void *>(const void *value, size_t alignment) {
         return reinterpret_cast<const void *>(AlignUp(reinterpret_cast<uintptr_t>(value), alignment));
     }
 
     template<>
-    constexpr ALWAYS_INLINE void *AlignDown<void *>(void *value, size_t alignment) {
+    ALWAYS_INLINE void *AlignDown<void *>(void *value, size_t alignment) {
         return reinterpret_cast<void *>(AlignDown(reinterpret_cast<uintptr_t>(value), alignment));
     }
 
     template<>
-    constexpr ALWAYS_INLINE const void *AlignDown<const void *>(const void *value, size_t alignment) {
+    ALWAYS_INLINE const void *AlignDown<const void *>(const void *value, size_t alignment) {
         return reinterpret_cast<void *>(AlignDown(reinterpret_cast<uintptr_t>(value), alignment));
     }
 
     template<>
-    constexpr ALWAYS_INLINE bool IsAligned<void *>(void *value, size_t alignment) {
+    ALWAYS_INLINE bool IsAligned<void *>(void *value, size_t alignment) {
         return IsAligned(reinterpret_cast<uintptr_t>(value), alignment);
     }
 
     template<>
-    constexpr ALWAYS_INLINE bool IsAligned<const void *>(const void *value, size_t alignment) {
+    ALWAYS_INLINE bool IsAligned<const void *>(const void *value, size_t alignment) {
         return IsAligned(reinterpret_cast<uintptr_t>(value), alignment);
     }
 

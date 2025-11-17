@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -48,7 +48,7 @@ namespace ams::erpt::srv {
                 ON_SCOPE_EXIT { Deallocate(hdr); };
 
                 hdr->magic         = HeaderMagic;
-                hdr->field_type    = static_cast<u32>(FieldToTypeMap[field_id]);
+                hdr->field_type    = static_cast<u32>(ConvertFieldToType(field_id));
                 hdr->element_count = arr_size;
                 hdr->reserved      = 0;
 
@@ -59,14 +59,14 @@ namespace ams::erpt::srv {
 
                 ON_SCOPE_EXIT { std::memset(hdr, 0, sizeof(hdr) + data_size); s_need_to_store_cipher = true; };
 
-                return Formatter::AddField(report, field_id, reinterpret_cast<u8 *>(hdr), sizeof(hdr) + data_size);
+                R_RETURN(Formatter::AddField(report, field_id, reinterpret_cast<u8 *>(hdr), sizeof(hdr) + data_size));
             }
         public:
             static Result Begin(Report *report, u32 record_count) {
                 s_need_to_store_cipher = false;
                 crypto::GenerateCryptographicallyRandomBytes(s_key, sizeof(s_key));
 
-                return Formatter::Begin(report, record_count + 1);
+                R_RETURN(Formatter::Begin(report, record_count + 1));
             }
 
             static Result End(Report *report) {
@@ -81,43 +81,43 @@ namespace ams::erpt::srv {
                     oaep.Encrypt(cipher, sizeof(cipher), s_key, sizeof(s_key), salt, sizeof(salt));
                 }
 
-                Formatter::AddField(report, FieldId_CipherKey, cipher, sizeof(cipher));
+                R_TRY(Formatter::AddField(report, FieldId_CipherKey, cipher, s_need_to_store_cipher ? sizeof(cipher) : 1));
                 std::memset(s_key, 0, sizeof(s_key));
 
-                return Formatter::End(report);
+                R_RETURN(Formatter::End(report));
             }
 
             static Result AddField(Report *report, FieldId field_id, bool value) {
-                return Formatter::AddField(report, field_id, value);
+                R_RETURN(Formatter::AddField(report, field_id, value));
             }
 
             template<typename T>
             static Result AddField(Report *report, FieldId field_id, T value) {
-                return Formatter::AddField<T>(report, field_id, value);
+                R_RETURN(Formatter::AddField<T>(report, field_id, value));
             }
 
             static Result AddField(Report *report, FieldId field_id, char *str, u32 len) {
-                if (FieldToFlagMap[field_id] == FieldFlag_Encrypt) {
-                    return EncryptArray<char>(report, field_id, str, len);
+                if (ConvertFieldToFlag(field_id) == FieldFlag_Encrypt) {
+                    R_RETURN(EncryptArray<char>(report, field_id, str, len));
                 } else {
-                    return Formatter::AddField(report, field_id, str, len);
+                    R_RETURN(Formatter::AddField(report, field_id, str, len));
                 }
             }
 
             static Result AddField(Report *report, FieldId field_id, u8 *bin, u32 len) {
-                if (FieldToFlagMap[field_id] == FieldFlag_Encrypt) {
-                    return EncryptArray<u8>(report, field_id, bin, len);
+                if (ConvertFieldToFlag(field_id) == FieldFlag_Encrypt) {
+                    R_RETURN(EncryptArray<u8>(report, field_id, bin, len));
                 } else {
-                    return Formatter::AddField(report, field_id, bin, len);
+                    R_RETURN(Formatter::AddField(report, field_id, bin, len));
                 }
             }
 
             template<typename T>
             static Result AddField(Report *report, FieldId field_id, T *arr, u32 len) {
-                if (FieldToFlagMap[field_id] == FieldFlag_Encrypt) {
-                    return EncryptArray<T>(report, field_id, arr, len);
+                if (ConvertFieldToFlag(field_id) == FieldFlag_Encrypt) {
+                    R_RETURN(EncryptArray<T>(report, field_id, arr, len));
                 } else {
-                    return Formatter::AddField<T>(report, field_id, arr, len);
+                    R_RETURN(Formatter::AddField<T>(report, field_id, arr, len));
                 }
             }
     };

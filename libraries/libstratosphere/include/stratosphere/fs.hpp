@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -30,18 +30,19 @@
 #include <stratosphere/fs/fsa/fs_registrar.hpp>
 #include <stratosphere/fs/fs_remote_filesystem.hpp>
 #include <stratosphere/fs/fs_read_only_filesystem.hpp>
-#include <stratosphere/fs/fs_shared_filesystem_holder.hpp>
 #include <stratosphere/fs/fs_istorage.hpp>
+#include <stratosphere/fs/fs_i_event_notifier.hpp>
 #include <stratosphere/fs/fs_substorage.hpp>
 #include <stratosphere/fs/fs_memory_storage.hpp>
 #include <stratosphere/fs/fs_remote_storage.hpp>
-#include <stratosphere/fs/fs_file_storage.hpp>
+#include <stratosphere/fs/common/fs_file_storage.hpp>
 #include <stratosphere/fs/fs_query_range.hpp>
 #include <stratosphere/fs/fs_speed_emulation.hpp>
 #include <stratosphere/fs/impl/fs_common_mount_name.hpp>
 #include <stratosphere/fs/fs_mount.hpp>
-#include <stratosphere/fs/fs_path_tool.hpp>
-#include <stratosphere/fs/fs_path_utils.hpp>
+#include <stratosphere/fs/fs_path_utility.hpp>
+#include <stratosphere/fs/fs_path.hpp>
+#include <stratosphere/fs/common/fs_directory_path_parser.hpp>
 #include <stratosphere/fs/fs_filesystem_utils.hpp>
 #include <stratosphere/fs/fs_romfs_filesystem.hpp>
 #include <stratosphere/fs/impl/fs_data.hpp>
@@ -50,8 +51,11 @@
 #include <stratosphere/fs/fs_code.hpp>
 #include <stratosphere/fs/fs_content.hpp>
 #include <stratosphere/fs/fs_content_storage.hpp>
-#include <stratosphere/fs/fs_image_directory.hpp>
+#include <stratosphere/fs/fs_error_info.hpp>
 #include <stratosphere/fs/fs_game_card.hpp>
+#include <stratosphere/fs/fs_host.hpp>
+#include <stratosphere/fs/fs_image_directory.hpp>
+#include <stratosphere/fs/fs_mmc.hpp>
 #include <stratosphere/fs/fs_save_data_types.hpp>
 #include <stratosphere/fs/fs_save_data_management.hpp>
 #include <stratosphere/fs/fs_save_data_transaction.hpp>
@@ -60,4 +64,9 @@
 #include <stratosphere/fs/fs_sd_card.hpp>
 #include <stratosphere/fs/fs_signed_system_partition.hpp>
 #include <stratosphere/fs/fs_system_data.hpp>
+#include <stratosphere/fs/fs_program_index_map_info.hpp>
+#include <stratosphere/fs/fs_program_id.hpp>
 #include <stratosphere/fs/impl/fs_access_log_impl.hpp>
+#include <stratosphere/fs/impl/fs_hash_generator_factory_selector.hpp>
+#include <stratosphere/fs/impl/fs_storage_service_object_adapter.hpp>
+#include <stratosphere/fs/fs_api.hpp>

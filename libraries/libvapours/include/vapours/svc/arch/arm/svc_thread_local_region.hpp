@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License
@@ -25,8 +25,10 @@ namespace ams::svc::arch::arm {
         u32 message_buffer[MessageBufferSize / sizeof(u32)];
         volatile u16 disable_count;
         volatile u16 interrupt_flag;
+        volatile u8 cache_maintenance_flag;
+        volatile s64 thread_cpu_time;
         /* TODO: Should we bother adding the Nintendo aarch32 thread local context here? */
-        uintptr_t TODO[(0x200 - 0x104) / sizeof(uintptr_t)];
+        uintptr_t TODO[(0x200 - 0x110) / sizeof(uintptr_t)];
     };
 
     ALWAYS_INLINE ThreadLocalRegion *GetThreadLocalRegion() {

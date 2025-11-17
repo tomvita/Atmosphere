@@ -1,5 +1,5 @@
 ﻿#
-# Copyright (c) 2018-2020 Atmosphère-NX
+# Copyright (c) Atmosphère-NX
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms and conditions of the GNU General Public License,
@@ -22,7 +22,7 @@ from struct import unpack as up, pack as pk
 LOAD_BASE = 0x7100000000
 
 HEADER = '''/*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -61,6 +61,9 @@ else:
  DT_RELAENT, DT_STRSZ, DT_SYMENT, DT_INIT, DT_FINI, DT_SONAME, DT_RPATH, DT_SYMBOLIC, DT_REL,
  DT_RELSZ, DT_RELENT, DT_PLTREL, DT_DEBUG, DT_TEXTREL, DT_JMPREL, DT_BIND_NOW, DT_INIT_ARRAY,
  DT_FINI_ARRAY, DT_INIT_ARRAYSZ, DT_FINI_ARRAYSZ, DT_RUNPATH, DT_FLAGS) = iter_range(31)
+
+DT_RELRSZ, DT_RELR, DT_RELRENT = 0x23, 0x24, 0x25
+
 DT_GNU_HASH = 0x6ffffef5
 DT_VERSYM = 0x6ffffff0
 DT_RELACOUNT = 0x6ffffff9
@@ -83,6 +86,8 @@ R_ARM_TLS_DESC = 13
 R_ARM_GLOB_DAT = 21
 R_ARM_JUMP_SLOT = 22
 R_ARM_RELATIVE = 23
+
+R_FAKE_RELR = -1
 
 R_AARCH64_ABS64 = 257
 R_AARCH64_GLOB_DAT = 1025
@@ -217,6 +222,41 @@ CATEGORIES = {
     123 : 'UsbStateInfo',
     124 : 'NvHostErrInfo',
     125 : 'RunningUlaInfo',
+    126 : 'InternalPanelInfo',
+    127 : 'ResourceLimitInfo',
+    128 : 'ResourceLimitPeakInfoDeprecated',
+    129 : 'TouchScreenInfo',
+    130 : 'AcpUserAccountSettingsInfo',
+    131 : 'AudioDeviceInfo',
+    132 : 'AbnormalWakeInfo',
+    133 : 'ServiceProfileInfo',
+    134 : 'BluetoothAudioInfo',
+    135 : 'BluetoothPairingCountInfo',
+    136 : 'FsProxyErrorInfo2',
+    137 : 'BuiltInWirelessOUIInfo',
+    138 : 'WirelessAPOUIInfo',
+    139 : 'EthernetAdapterOUIInfo',
+    140 : 'NANDTypeInfo',
+    141 : 'MicroSDTypeInfo',
+    142 : 'AttachmentFileInfo',
+    143 : 'WlanInfo',
+    144 : 'HalfAwakeStateInfo',
+    145 : 'PctlSettingInfo',
+    146 : 'GameCardLogInfo',
+    147 : 'WlanIoctlErrorInfo',
+    148 : 'SdCardActivationInfo',
+    149 : 'GameCardDetailedErrorInfo',
+    150 : 'NetworkInfo2',
+    151 : 'SystemSettingInfo',
+    152 : 'MigrationStateInfo',
+    153 : 'WinVdInfo',
+    154 : 'PscTransitionStateInfo',
+    155 : 'FsProxyErrorInfo3',
+    156 : 'BluetoothErrorInfo',
+    1000 : 'TestNx',
+    1001 : 'NANDTypeInfo',
+    1002 : 'NANDExtendedCsd',
+    1003 : 'BluetoothAudioInfo',
 }
 
 FIELD_TYPES = {
@@ -244,15 +284,7 @@ FIELD_FLAGS = {
 }
 
 def get_full(nxo):
-    full = nxo.text[0]
-    if nxo.ro[2] >= len(full):
-        full += b'\x00' * (nxo.ro[2] - len(full))
-    else:
-        full = full[:nxo.ro[2]]
-    full += nxo.ro[0]
-    if nxo.data[2] > len(full):
-        full += b'\x00' * (nxo.data[2] - len(full))
-    full += nxo.data[0]
+    full = nxo.full[:]
 
     undef_count = 0
     for s in nxo.symbols:
@@ -273,11 +305,12 @@ def get_full(nxo):
             s.resolved = LOAD_BASE + s.value
             if s.name:
                 if s.type == STT_FUNC:
-                    print(hex(s.resolved), s.name)
-                    idaapi.add_entry(s.resolved, s.resolved, s.name, 0)
+                    #print(hex(s.resolved), s.name)
+                    #idaapi.add_entry(s.resolved, s.resolved, s.name, 0)
+                    pass
                 else:
-                    idaapi.force_name(s.resolved, s.name)
-
+                    #idaapi.force_name(s.resolved, s.name)
+                    pass
         else:
             # NULL symbol
             s.resolved = 0
@@ -288,6 +321,8 @@ def get_full(nxo):
         return z[:target] + pk('<Q', val) + z[target+8:]
     def get_dword(z, target):
         return up('<I', z[target:target+4])[0]
+    def get_qword(z, target):
+        return up('<Q', z[target:target+8])[0]
 
     for offset, r_type, sym, addend in nxo.relocations:
         #print offset, r_type, sym, addend
@@ -303,15 +338,30 @@ def get_full(nxo):
             full = put_qword(full, target, sym.resolved + addend)
         elif r_type == R_AARCH64_RELATIVE:
             full = put_qword(full, target, LOAD_BASE + addend)
+        elif r_type == R_FAKE_RELR:
+            addend = get_qword(full, offset)
+            #print '%X %X %x' % (offset, target, addend)
+            full = put_qword(full, offset, addend + LOAD_BASE)
         else:
             print('TODO r_type %d' % (r_type,))
+    with open('E:\\full.bin', 'wb') as f:
+        f.write(full)
     return full
 
 def locate_fields(full):
     start = ['TestU64', 'TestU32', 'TestI64', 'TestI32']
-    inds = [LOAD_BASE + full.index('%s\x00' % s) for s in start]
-    target = pk('<QQQQ', inds[0], inds[1], inds[2], inds[3])
-    return full.index(target)
+    inds = [full.index('%s\x00' % s) for s in start]
+    target = pk('<QQQQ', LOAD_BASE + inds[0], LOAD_BASE + inds[1], LOAD_BASE + inds[2], LOAD_BASE + inds[3])
+    if target in full:
+        return 0, full.index(target)
+    else:
+        # 17.0.0
+        ofs = 0
+        while ofs < len(full) - 0x10:
+            test = full[ofs:ofs + 0x10]
+            if test == pk('<IIII', *[((x - ofs) & 0xFFFFFFFF) for x in inds]):
+                return 1, ofs
+            ofs += 4
 
 def read_string(full, ofs):
     s = ''
@@ -333,18 +383,27 @@ def is_valid_field_name(s):
             return False
     return True
 
-def parse_fields(full, table):
+def parse_fields(full, table, format_version):
     fields = []
     ofs = 0
-    while True:
-        val = up('<Q', full[table + ofs:table + ofs + 8])[0]
-        if (val & 0xFFFFFFFF00000000) != LOAD_BASE:
-            break
-        s = read_string(full, val - LOAD_BASE)
-        if not is_valid_field_name(s):
-            break
-        fields.append(s)
-        ofs += 8
+    if format_version == 0:
+        while True:
+            val = up('<Q', full[table + ofs:table + ofs + 8])[0]
+            if (val & 0xFFFFFFFF00000000) != LOAD_BASE:
+                break
+            s = read_string(full, val - LOAD_BASE)
+            if not is_valid_field_name(s):
+                break
+            fields.append(s)
+            ofs += 8
+    elif format_version == 1:
+        while True:
+            val = up('<I', full[table + ofs:table + ofs + 4])[0]
+            s = read_string(full, (table + val) & 0xFFFFFFFF)
+            if not is_valid_field_name(s):
+                break
+            fields.append(s)
+            ofs += 4
     return fields
 
 def find_categories(full, num_fields):
@@ -353,14 +412,28 @@ def find_categories(full, num_fields):
     return list(up('<'+'I'*num_fields, full[ind:ind+4*num_fields]))
 
 def find_types(full, num_fields):
-    KNOWN = range(10) + [4, 4, 2, 4]
-    ind = full.index(''.join(pk('<I', i) for i in KNOWN))
+    KNOWN     = range(10) + [4, 4, 2, 4]
+    KNOWN_OLD = range(10) + [4, 4, 0, 4]
+    try:
+        ind = full.index(''.join(pk('<I', i) for i in KNOWN))
+    except ValueError:
+        ind = full.index(''.join(pk('<I', i) for i in KNOWN_OLD))
     return list(up('<'+'I'*num_fields, full[ind:ind+4*num_fields]))
 
-def find_flags(full, num_fields):
+def find_flags(full, num_fields, magic_idx):
     KNOWN = '\x00' + ('\x01'*6) + '\x00\x01\x01\x00'
-    ind = full.index(KNOWN) - 443
+    if num_fields < magic_idx + len(KNOWN):
+        return [0] * num_fields
+    ind = full.index(KNOWN) - magic_idx
     return list(up('<'+'B'*num_fields, full[ind:ind+num_fields]))
+
+def find_id_array(full, num_fields, magic_idx, table_format):
+    if table_format == 0:
+        return list(range(num_fields))
+    else:
+        KNOWN = pk('<IIIIII', *range(444, 450))
+        ind = full.index(KNOWN) - 4 * magic_idx
+        return list(up('<' + 'I'*num_fields, full[ind:ind+4*num_fields]))
 
 def cat_to_string(c):
     return CATEGORIES[c] if c in CATEGORIES else 'Category_Unknown%d' % c
@@ -372,28 +445,32 @@ def flg_to_string(f):
     return FIELD_FLAGS[f] if f in FIELD_FLAGS else 'FieldFlag_Unknown%d' % f
 
 def main(argc, argv):
-    if argc != 2:
-        print 'Usage: %s erpt_nso' % argv[0]
+    if argc != 2 and not (argc == 3 and argv[1] == '-f'):
+        print 'Usage: %s [-f] erpt_nso' % argv[0]
         return 1
-    f = open(argv[1], 'rb')
+    f = open(argv[-1], 'rb')
     nxo = nxo64.load_nxo(f)
     full = get_full(nxo)
-    field_table = locate_fields(full)
-    fields = parse_fields(full, field_table)
+    table_format, field_table = locate_fields(full)
+    fields = parse_fields(full, field_table, table_format)
     NUM_FIELDS = len(fields)
     cats = find_categories(full, NUM_FIELDS)
     types = find_types(full, NUM_FIELDS)
-    flags = find_flags(full, NUM_FIELDS)
+    flags = find_flags(full, NUM_FIELDS, fields.index('TestStringEncrypt') - 1)
+    ids   = find_id_array(full, NUM_FIELDS, fields.index('TestStringEncrypt'), table_format)
+    assert ids[:4] == [0, 1, 2, 3]
     print 'Identified %d fields.' % NUM_FIELDS
     mf = max(len(s) for s in fields)
     mc = max(len(cat_to_string(c)) for c in cats)
     mt = max(len(typ_to_string(t)) for t in types)
     ml = max(len(flg_to_string(f)) for f in flags)
+    if argc == 3:
+        mf, mc, mt, ml = (64, 48, 32, 32)
     format_string = '- %%-%ds %%-%ds %%-%ds %%-%ds' % (mf+1, mc+1, mt+1, ml)
     for i in xrange(NUM_FIELDS):
         f, c, t, l = fields[i], cat_to_string(cats[i]), typ_to_string(types[i]), flg_to_string(flags[i])
         print format_string % (f+',', c+',', t+',', l)
-    with open(argv[1]+'.hpp', 'w') as out:
+    with open(argv[-1]+'.hpp', 'w') as out:
         out.write(HEADER)
         out.write('#define AMS_ERPT_FOREACH_FIELD_TYPE(HANDLER) \\\n')
         for tp in sorted(list(set(types + FIELD_TYPES.keys()))):
@@ -405,15 +482,16 @@ def main(argc, argv):
         out.write('\n')
         out.write('#define AMS_ERPT_FOREACH_FIELD(HANDLER) \\\n')
         for i in xrange(NUM_FIELDS):
-            f, c, t, l = fields[i], cats[i], types[i], flags[i]
-            out.write(('    HANDLER(%%-%ds %%-4s %%-%ds %%-%ds %%-%ds) \\\n' % (mf+1, mc+1, mt+1, ml)) % (f+',', '%d,'%i, cat_to_string(c)+',', typ_to_string(t)+',', flg_to_string(l)))
+            f, c, t, l, d = fields[i], cats[i], types[i], flags[i], ids[i]
+            out.write(('    HANDLER(%%-%ds %%-4s %%-%ds %%-%ds %%-%ds) \\\n' % (mf+1, mc+1, mt+1, ml)) % (f+',', '%d,'%d, cat_to_string(c)+',', typ_to_string(t)+',', flg_to_string(l)))
         out.write('\n')
     return 0
 
 if __name__ == '__main__':
     try:
         ret = main(len(sys.argv), sys.argv)
-    except:
+    except Exception as e:
+        print e
         ret = 1
         print 'exception'
     sys.exit(ret)

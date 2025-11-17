@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -22,10 +22,16 @@ namespace ams::os {
 
     class SdkConditionVariable;
 
+    struct ThreadType;
+
     struct SdkMutexType {
+        #if !defined(AMS_OS_INTERNAL_CRITICAL_SECTION_IMPL_CAN_CHECK_LOCKED_BY_CURRENT_THREAD)
+        os::ThreadType *owner_thread;
+        #endif
         union {
             s32 _arr[sizeof(impl::InternalCriticalSectionStorage) / sizeof(s32)];
             impl::InternalCriticalSectionStorage _storage;
+            impl::InternalCriticalSectionStorageTypeForConstantInitialize _storage_for_constant_initialize;
         };
     };
     static_assert(std::is_trivial<SdkMutexType>::value);
@@ -42,15 +48,19 @@ namespace ams::os {
         private:
             friend class SdkConditionVariable;
         private:
-            SdkMutexType mutex;
+            SdkMutexType m_mutex;
         public:
-            constexpr SdkMutex() : mutex{{0}} { /* ... */ }
+            #if defined(AMS_OS_INTERNAL_CRITICAL_SECTION_IMPL_CAN_CHECK_LOCKED_BY_CURRENT_THREAD)
+            constexpr SdkMutex() : m_mutex{{AMS_OS_INTERNAL_CRITICAL_SECTION_IMPL_CONSTANT_INITIALIZER}} { /* ... */ }
+            #else
+            constexpr SdkMutex() : m_mutex{nullptr, {AMS_OS_INTERNAL_CRITICAL_SECTION_IMPL_CONSTANT_INITIALIZER}} { /* ... */ }
+            #endif
 
-            ALWAYS_INLINE void Lock()    { return os::LockSdkMutex(std::addressof(this->mutex)); }
-            ALWAYS_INLINE bool TryLock() { return os::TryLockSdkMutex(std::addressof(this->mutex)); }
-            ALWAYS_INLINE void Unlock()  { return os::UnlockSdkMutex(std::addressof(this->mutex)); }
+            ALWAYS_INLINE void Lock()    { return os::LockSdkMutex(std::addressof(m_mutex)); }
+            ALWAYS_INLINE bool TryLock() { return os::TryLockSdkMutex(std::addressof(m_mutex)); }
+            ALWAYS_INLINE void Unlock()  { return os::UnlockSdkMutex(std::addressof(m_mutex)); }
 
-            ALWAYS_INLINE bool IsLockedByCurrentThread() const { return os::IsSdkMutexLockedByCurrentThread(std::addressof(this->mutex)); }
+            ALWAYS_INLINE bool IsLockedByCurrentThread() const { return os::IsSdkMutexLockedByCurrentThread(std::addressof(m_mutex)); }
 
             ALWAYS_INLINE void lock()     { return this->Lock(); }
             ALWAYS_INLINE bool try_lock() { return this->TryLock(); }

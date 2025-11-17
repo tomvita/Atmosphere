@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,11 +15,13 @@
  */
 #include <stratosphere.hpp>
 
+#if defined(ATMOSPHERE_OS_HORIZON)
 extern "C" {
 
     extern TimeServiceType __nx_time_service_type;
 
 }
+#endif
 
 namespace ams::time {
 
@@ -34,11 +36,10 @@ namespace ams::time {
             InitializeMode_SystemUser,
         };
 
-        u32 g_initialize_count = 0;
-        InitializeMode g_initialize_mode = InitializeMode_None;
+        constinit u32 g_initialize_count = 0;
+        constinit InitializeMode g_initialize_mode = InitializeMode_None;
 
-        /* TODO: os::SdkMutex */
-        os::Mutex g_initialize_mutex(false);
+        constinit os::SdkMutex g_initialize_mutex;
 
         Result InitializeImpl(InitializeMode mode) {
             std::scoped_lock lk(g_initialize_mutex);
@@ -46,9 +47,10 @@ namespace ams::time {
             if (g_initialize_count > 0) {
                 AMS_ABORT_UNLESS(mode == g_initialize_mode);
                 g_initialize_count++;
-                return ResultSuccess();
+                R_SUCCEED();
             }
 
+            #if defined(ATMOSPHERE_OS_HORIZON)
             switch (mode) {
                 case InitializeMode_Normal:     __nx_time_service_type = ::TimeServiceType_User;       break;
                 case InitializeMode_Menu:       __nx_time_service_type = ::TimeServiceType_Menu;       break;
@@ -59,24 +61,31 @@ namespace ams::time {
             }
 
             R_TRY(::timeInitialize());
+            #else
+            // TODO: Real AMS_ABORT("TODO");
+            #endif
 
             g_initialize_count++;
             g_initialize_mode = mode;
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
     }
 
     Result Initialize() {
-        return InitializeImpl(InitializeMode_Normal);
+        R_RETURN(InitializeImpl(InitializeMode_Normal));
     }
 
     Result InitializeForSystem() {
-        return InitializeImpl(InitializeMode_System);
+        R_RETURN(InitializeImpl(InitializeMode_System));
     }
 
     Result InitializeForSystemUser() {
-        return InitializeImpl(InitializeMode_System);
+        if (hos::GetVersion() >= hos::Version_9_0_0) {
+            R_RETURN(InitializeImpl(InitializeMode_SystemUser));
+        } else {
+            R_RETURN(InitializeImpl(InitializeMode_Normal));
+        }
     }
 
     Result Finalize() {
@@ -84,12 +93,16 @@ namespace ams::time {
 
         if (g_initialize_count > 0) {
             if ((--g_initialize_count) == 0) {
+                #if defined(ATMOSPHERE_OS_HORIZON)
                 ::timeExit();
+                #else
+                // TODO: Real AMS_ABORT("TODO");
+                #endif
                 g_initialize_mode = InitializeMode_None;
             }
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     bool IsInitialized() {
@@ -98,8 +111,12 @@ namespace ams::time {
         return g_initialize_count > 0;
     }
 
+    bool IsValidDate(int year, int month, int day) {
+        return impl::util::IsValidDate(year, month, day);
+    }
+
     Result GetElapsedSecondsBetween(s64 *out, const SteadyClockTimePoint &from, const SteadyClockTimePoint &to) {
-        return impl::util::GetSpanBetween(out, from, to);
+        R_RETURN(impl::util::GetSpanBetween(out, from, to));
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,11 +17,10 @@
 #pragma once
 #include <vapours/results/results_common.hpp>
 
+/* Please note: These results are all custom, and not official. */
+R_DEFINE_NAMESPACE_RESULT_MODULE(ams::exosphere, 444);
+
 namespace ams::exosphere {
-
-    /* Please note: These results are all custom, and not official. */
-    R_DEFINE_NAMESPACE_RESULT_MODULE(444);
-
 
     /* Result 1-1000 reserved for Atmosphere. */
     R_DEFINE_ERROR_RESULT(NotPresent,       1);

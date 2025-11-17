@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -25,13 +25,15 @@ namespace ams::mitm::bpc {
         constexpr uintptr_t IramBase = 0x40000000ull;
         constexpr uintptr_t IramPayloadBase = 0x40010000ull;
         constexpr size_t IramSize = 0x40000;
-        constexpr size_t IramPayloadMaxSize = 0x2E000;
+        constexpr size_t IramPayloadMaxSize = 0x24000;
+        constexpr size_t IramFatalErrorContextOffset = 0x2E000;
 
         /* Helper enum. */
         enum class RebootType : u32 {
             Standard,
             ToRcm,
             ToPayload,
+            ByPmic,
         };
 
         /* Globals. */
@@ -50,13 +52,26 @@ namespace ams::mitm::bpc {
             }
         }
 
-        void DoRebootToPayload(const ams::FatalErrorContext *ctx) {
+        void DoRebootToPayload() {
             /* Ensure clean IRAM state. */
             ClearIram();
 
             /* Copy in payload. */
             for (size_t ofs = 0; ofs < sizeof(g_reboot_payload); ofs += sizeof(g_work_page)) {
-                std::memcpy(g_work_page, &g_reboot_payload[ofs], std::min(sizeof(g_reboot_payload) - ofs, sizeof(g_work_page)));
+                std::memcpy(g_work_page, g_reboot_payload + ofs, std::min(sizeof(g_reboot_payload) - ofs, sizeof(g_work_page)));
+                exosphere::CopyToIram(IramPayloadBase + ofs, g_work_page, sizeof(g_work_page));
+            }
+
+            exosphere::ForceRebootToIramPayload();
+        }
+
+        void DoRebootToFatalError(const ams::FatalErrorContext *ctx) {
+            /* Ensure clean IRAM state. */
+            ClearIram();
+
+            /* Copy in payload. */
+            for (size_t ofs = 0; ofs < sizeof(g_reboot_payload); ofs += sizeof(g_work_page)) {
+                std::memcpy(g_work_page, g_reboot_payload + ofs, std::min(sizeof(g_reboot_payload) - ofs, sizeof(g_work_page)));
                 exosphere::CopyToIram(IramPayloadBase + ofs, g_work_page, sizeof(g_work_page));
             }
 
@@ -64,10 +79,10 @@ namespace ams::mitm::bpc {
             if (ctx != nullptr) {
                 std::memset(g_work_page, 0xCC, sizeof(g_work_page));
                 std::memcpy(g_work_page, ctx, sizeof(*ctx));
-                exosphere::CopyToIram(IramPayloadBase + IramPayloadMaxSize, g_work_page, sizeof(g_work_page));
+                exosphere::CopyToIram(IramPayloadBase + IramFatalErrorContextOffset, g_work_page, sizeof(g_work_page));
             }
 
-            exosphere::ForceRebootToIramPayload();
+            exosphere::ForceRebootToFatalError();
         }
 
     }
@@ -79,12 +94,15 @@ namespace ams::mitm::bpc {
 
     void RebootSystem() {
         switch (g_reboot_type) {
+            case RebootType::ByPmic:
+                exosphere::ForceRebootByPmic();
+                break;
             case RebootType::ToRcm:
                 exosphere::ForceRebootToRcm();
                 break;
             case RebootType::ToPayload:
             default: /* This should never be called with ::Standard */
-                DoRebootToPayload(nullptr);
+                DoRebootToPayload();
                 break;
         }
     }
@@ -95,10 +113,15 @@ namespace ams::mitm::bpc {
 
     /* Atmosphere power utilities. */
     void RebootForFatalError(const ams::FatalErrorContext *ctx) {
-        DoRebootToPayload(ctx);
+        DoRebootToFatalError(ctx);
     }
 
     void SetRebootPayload(const void *payload, size_t payload_size) {
+        /* Mariko does not support reboot-to-payload. */
+        if (spl::GetSocType() == spl::SocType_Mariko) {
+            return;
+        }
+
         /* Clear payload buffer */
         std::memset(g_reboot_payload, 0xCC, sizeof(g_reboot_payload));
 
@@ -108,29 +131,36 @@ namespace ams::mitm::bpc {
         /* Copy in payload. */
         std::memcpy(g_reboot_payload, payload, payload_size);
 
+        /* Note to the secure monitor that we have a payload. */
+        spl::smc::AsyncOperationKey dummy;
+        spl::smc::SetConfig(std::addressof(dummy), spl::ConfigItem::ExospherePayloadAddress, nullptr, 0, g_reboot_payload);
+
         /* NOTE: Preferred reboot type may be overrwritten when parsed from settings during boot. */
         g_reboot_type = RebootType::ToPayload;
     }
 
     Result LoadRebootPayload() {
+        /* Mariko does not support reboot-to-payload. */
+        R_SUCCEED_IF(spl::GetSocType() == spl::SocType_Mariko)
+
         /* Clear payload buffer */
         std::memset(g_reboot_payload, 0xCC, sizeof(g_reboot_payload));
 
         /* Open payload file. */
         FsFile payload_file;
-        R_TRY(fs::OpenAtmosphereSdFile(&payload_file, "/reboot_payload.bin", ams::fs::OpenMode_Read));
-        ON_SCOPE_EXIT { fsFileClose(&payload_file); };
+        R_TRY(fs::OpenAtmosphereSdFile(std::addressof(payload_file), "/reboot_payload.bin", ams::fs::OpenMode_Read));
+        ON_SCOPE_EXIT { fsFileClose(std::addressof(payload_file)); };
 
         /* Read payload file. Discard result. */
         {
             size_t actual_size;
-            fsFileRead(&payload_file, 0, g_reboot_payload, sizeof(g_reboot_payload), FsReadOption_None, &actual_size);
+            fsFileRead(std::addressof(payload_file), 0, g_reboot_payload, sizeof(g_reboot_payload), FsReadOption_None, std::addressof(actual_size));
         }
 
         /* NOTE: Preferred reboot type will be parsed from settings later on. */
         g_reboot_type = RebootType::ToPayload;
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     Result DetectPreferredRebootFunctionality() {
@@ -145,7 +175,12 @@ namespace ams::mitm::bpc {
             g_reboot_type = RebootType::ToPayload;
         }
 
-        return ResultSuccess();
+        /* TODO: Should we actually allow control over this on mariko? */
+        if (spl::GetSocType() == spl::SocType_Mariko) {
+            g_reboot_type = RebootType::ByPmic;
+        }
+
+        R_SUCCEED();
     }
 
 }

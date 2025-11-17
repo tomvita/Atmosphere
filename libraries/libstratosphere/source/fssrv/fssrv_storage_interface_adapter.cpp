@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,80 +15,62 @@
  */
 #include <stratosphere.hpp>
 #include <stratosphere/fssrv/fssrv_interface_adapters.hpp>
+#include "fssrv_retry_utility.hpp"
 
 namespace ams::fssrv::impl {
 
-    StorageInterfaceAdapter::StorageInterfaceAdapter(fs::IStorage *storage) : base_storage(storage) {
-        /* ... */
-    }
-
-    StorageInterfaceAdapter::StorageInterfaceAdapter(std::unique_ptr<fs::IStorage> storage) : base_storage(storage.release()) {
-        /* ... */
-    }
-
-    StorageInterfaceAdapter::StorageInterfaceAdapter(std::shared_ptr<fs::IStorage> &&storage) : base_storage(std::move(storage)) {
-        /* ... */
-    }
-
-    StorageInterfaceAdapter::~StorageInterfaceAdapter() {
-        /* ... */
-    }
-
-    std::optional<std::shared_lock<os::ReadWriteLock>> StorageInterfaceAdapter::AcquireCacheInvalidationReadLock() {
-        std::optional<std::shared_lock<os::ReadWriteLock>> lock;
-        if (this->deep_retry_enabled) {
-            lock.emplace(this->invalidation_lock);
-        }
-        return lock;
-    }
-
     Result StorageInterfaceAdapter::Read(s64 offset, const ams::sf::OutNonSecureBuffer &buffer, s64 size) {
-        /* TODO: N retries on ResultDataCorrupted, we may want to eventually. */
-        /* TODO: Deep retry */
-        R_UNLESS(offset >= 0, fs::ResultInvalidOffset());
-        R_UNLESS(size >= 0,   fs::ResultInvalidSize());
-        return this->base_storage->Read(offset, buffer.GetPointer(), size);
+        /* Check pre-conditions. */
+        R_UNLESS(0 <= offset,                                fs::ResultInvalidOffset());
+        R_UNLESS(0 <= size,                                  fs::ResultInvalidSize());
+        R_UNLESS(size <= static_cast<s64>(buffer.GetSize()), fs::ResultInvalidSize());
+
+        R_RETURN(RetryFinitelyForDataCorrupted([&] () ALWAYS_INLINE_LAMBDA {
+            R_RETURN(m_base_storage->Read(offset, buffer.GetPointer(), size));
+        }));
     }
 
     Result StorageInterfaceAdapter::Write(s64 offset, const ams::sf::InNonSecureBuffer &buffer, s64 size)  {
-        /* TODO: N increases thread priority temporarily when writing. We may want to eventually. */
-        R_UNLESS(offset >= 0, fs::ResultInvalidOffset());
-        R_UNLESS(size >= 0,   fs::ResultInvalidSize());
+        /* Check pre-conditions. */
+        R_UNLESS(0 <= offset,                                fs::ResultInvalidOffset());
+        R_UNLESS(0 <= size,                                  fs::ResultInvalidSize());
+        R_UNLESS(size <= static_cast<s64>(buffer.GetSize()), fs::ResultInvalidSize());
 
-        auto read_lock = this->AcquireCacheInvalidationReadLock();
-        return this->base_storage->Write(offset, buffer.GetPointer(), size);
+        /* Temporarily increase our thread's priority. */
+        fssystem::ScopedThreadPriorityChangerByAccessPriority cp(fssystem::ScopedThreadPriorityChangerByAccessPriority::AccessMode::Write);
+
+        R_RETURN(m_base_storage->Write(offset, buffer.GetPointer(), size));
     }
 
     Result StorageInterfaceAdapter::Flush()  {
-        auto read_lock = this->AcquireCacheInvalidationReadLock();
-        return this->base_storage->Flush();
+        R_RETURN(m_base_storage->Flush());
     }
 
     Result StorageInterfaceAdapter::SetSize(s64 size)  {
         R_UNLESS(size >= 0, fs::ResultInvalidSize());
-        auto read_lock = this->AcquireCacheInvalidationReadLock();
-        return this->base_storage->SetSize(size);
+        R_RETURN(m_base_storage->SetSize(size));
     }
 
     Result StorageInterfaceAdapter::GetSize(ams::sf::Out<s64> out)  {
-        auto read_lock = this->AcquireCacheInvalidationReadLock();
-        return this->base_storage->GetSize(out.GetPointer());
+        R_RETURN(m_base_storage->GetSize(out.GetPointer()));
     }
 
     Result StorageInterfaceAdapter::OperateRange(ams::sf::Out<fs::StorageQueryRangeInfo> out, s32 op_id, s64 offset, s64 size) {
         /* N includes this redundant check, so we will too. */
         R_UNLESS(out.GetPointer() != nullptr, fs::ResultNullptrArgument());
 
+        /* Clear the range info. */
         out->Clear();
-        if (op_id == static_cast<s32>(fs::OperationId::QueryRange)) {
-            auto read_lock = this->AcquireCacheInvalidationReadLock();
 
-            fs::StorageQueryRangeInfo info;
-            R_TRY(this->base_storage->OperateRange(&info, sizeof(info), fs::OperationId::QueryRange, offset, size, nullptr, 0));
+        if (op_id == static_cast<s32>(fs::OperationId::QueryRange)) {
+            fs::FileQueryRangeInfo info;
+            R_TRY(m_base_storage->OperateRange(std::addressof(info), sizeof(info), fs::OperationId::QueryRange, offset, size, nullptr, 0));
             out->Merge(info);
+        } else if (op_id == static_cast<s32>(fs::OperationId::Invalidate)) {
+            R_TRY(m_base_storage->OperateRange(nullptr, 0, fs::OperationId::Invalidate, offset, size, nullptr, 0));
         }
 
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
 }

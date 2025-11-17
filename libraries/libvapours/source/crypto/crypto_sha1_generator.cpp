@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,7 +17,7 @@
 
 namespace ams::crypto {
 
-    void GenerateSha1Hash(void *dst, size_t dst_size, const void *src, size_t src_size) {
+    void GenerateSha1(void *dst, size_t dst_size, const void *src, size_t src_size) {
         Sha1Generator gen;
 
         gen.Initialize();

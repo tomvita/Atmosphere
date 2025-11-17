@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -36,8 +36,12 @@ namespace ams::ldr {
     };
 
     /* Meta API. */
-    Result LoadMeta(Meta *out_meta, const ncm::ProgramLocation &loc, const cfg::OverrideStatus &status);
-    Result LoadMetaFromCache(Meta *out_meta, const ncm::ProgramLocation &loc, const cfg::OverrideStatus &status);
+    Result LoadMeta(Meta *out_meta, const ncm::ProgramLocation &loc, const cfg::OverrideStatus &status, ncm::ContentMetaPlatform platform, bool unk_unused);
+    Result LoadMetaFromCache(Meta *out_meta, const ncm::ProgramLocation &loc, const cfg::OverrideStatus &status, ncm::ContentMetaPlatform platform);
     void   InvalidateMetaCache();
+
+    Result LoadMetaForBrowserCoreDll(Meta *out_meta, const ncm::ProgramLocation &loc, const cfg::OverrideStatus &status, ncm::ContentMetaPlatform platform, bool unk_unused);
+    Result LoadMetaFromCacheForBrowserCoreDll(Meta *out_meta, const ncm::ProgramLocation &loc, const cfg::OverrideStatus &status, ncm::ContentMetaPlatform platform);
+    void   InvalidateMetaCacheForBrowserCoreDll();
 
 }

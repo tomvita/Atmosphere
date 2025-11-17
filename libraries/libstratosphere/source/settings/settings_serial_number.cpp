@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,6 +15,20 @@
  */
 #include <stratosphere.hpp>
 #include "impl/settings_serial_number_impl.hpp"
+
+namespace ams::settings::factory {
+
+    Result GetSerialNumber(SerialNumber *out) {
+        R_TRY_CATCH(settings::impl::GetSerialNumber(out)) {
+            /* It's not a fatal error if the calib filesystem is corrupted. */
+            R_CATCH_RETHROW(settings::ResultCalibrationDataFileSystemCorrupted)
+            R_CATCH_RETHROW(settings::ResultCalibrationDataCrcError)
+        } R_END_TRY_CATCH_WITH_ABORT_UNLESS;
+
+        R_SUCCEED();
+    }
+
+}
 
 namespace ams::settings::system {
 

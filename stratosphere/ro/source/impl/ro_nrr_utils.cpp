@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,6 +15,7 @@
  */
 #include <stratosphere.hpp>
 #include "ro_nrr_utils.hpp"
+#include "ro_random.hpp"
 #include "ro_service_impl.hpp"
 
 namespace ams::ro::impl {
@@ -118,7 +119,7 @@ namespace ams::ro::impl {
             }
 
             *out = IsDevelopmentHardware() ? DevModuli[key_generation] : ProdModuli[key_generation];
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         Result ValidateNrrCertification(const NrrHeader *header, const u8 *mod) {
@@ -135,9 +136,9 @@ namespace ams::ro::impl {
             R_UNLESS(crypto::VerifyRsa2048PssSha256(sig, sig_size, mod, mod_size, exp, exp_size, msg, msg_size), ro::ResultNotAuthorized());
 
             /* Check ProgramId pattern is valid. */
-            R_UNLESS(header->IsProgramIdValid(), ResultNotAuthorized());
+            R_UNLESS(header->IsProgramIdValid(), ro::ResultNotAuthorized());
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         Result ValidateNrrSignature(const NrrHeader *header) {
@@ -154,15 +155,15 @@ namespace ams::ro::impl {
             const size_t msg_size = header->GetSignedAreaSize();
             R_UNLESS(crypto::VerifyRsa2048PssSha256(sig, sig_size, mod, mod_size, exp, exp_size, msg, msg_size), ro::ResultNotAuthorized());
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         Result ValidateNrr(const NrrHeader *header, u64 size, ncm::ProgramId program_id, NrrKind nrr_kind, bool enforce_nrr_kind) {
             /* Check magic. */
-            R_UNLESS(header->IsMagicValid(), ResultInvalidNrr());
+            R_UNLESS(header->IsMagicValid(), ro::ResultInvalidNrr());
 
             /* Check size. */
-            R_UNLESS(header->GetSize() == size, ResultInvalidSize());
+            R_UNLESS(header->GetSize() == size, ro::ResultInvalidSize());
 
             /* Only perform checks if we must. */
             const bool ease_nro_restriction = ShouldEaseNroRestriction();
@@ -180,59 +181,64 @@ namespace ams::ro::impl {
                 R_TRY(ValidateNrrSignature(header));
 
                 /* Check program id. */
-                R_UNLESS(header->GetProgramId() == program_id, ResultInvalidNrr());
+                R_UNLESS(header->GetProgramId() == program_id, ro::ResultInvalidNrr());
 
                 /* Check nrr kind. */
                 if (hos::GetVersion() >= hos::Version_7_0_0 && enforce_nrr_kind) {
-                    R_UNLESS(header->GetNrrKind() == nrr_kind, ResultInvalidNrrKind());
+                    R_UNLESS(header->GetNrrKind() == nrr_kind, ro::ResultInvalidNrrKind());
                 }
             }
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
     }
 
     /* Utilities for working with NRRs. */
-    Result MapAndValidateNrr(NrrHeader **out_header, u64 *out_mapped_code_address, void *out_hash, size_t out_hash_size, Handle process_handle, ncm::ProgramId program_id, u64 nrr_heap_address, u64 nrr_heap_size, NrrKind nrr_kind, bool enforce_nrr_kind) {
-        map::MappedCodeMemory nrr_mcm(ResultInternalError{});
+    Result MapAndValidateNrr(NrrHeader **out_header, u64 *out_mapped_code_address, void *out_hash, size_t out_hash_size, os::NativeHandle process_handle, ncm::ProgramId program_id, u64 nrr_heap_address, u64 nrr_heap_size, NrrKind nrr_kind, bool enforce_nrr_kind) {
+        /* Re-map the nrr as code memory in the destination process. */
+        u64 code_address = 0;
+        const os::ProcessMemoryRegion region = { nrr_heap_address, nrr_heap_size };
+        R_TRY_CATCH(os::MapProcessCodeMemory(std::addressof(code_address), process_handle, std::addressof(region), 1, ro::impl::GenerateSecureRandom)) {
+            R_CONVERT(os::ResultOutOfAddressSpace, ro::ResultOutOfAddressSpace())
+        } R_END_TRY_CATCH;
 
-        /* First, map the NRR. */
-        R_TRY(map::MapCodeMemoryInProcess(nrr_mcm, process_handle, nrr_heap_address, nrr_heap_size));
+        /* If we fail, unmap the nrr code memory. */
+        ON_RESULT_FAILURE { R_ABORT_UNLESS(os::UnmapProcessCodeMemory(process_handle, code_address, std::addressof(region), 1)); };
 
-        const u64 code_address = nrr_mcm.GetDstAddress();
-        uintptr_t map_address;
-        R_UNLESS(R_SUCCEEDED(map::LocateMappableSpace(&map_address, nrr_heap_size)), ResultOutOfAddressSpace());
+        /* Map the nrr in our process. */
+        void *mapped_memory = nullptr;
+        R_TRY_CATCH(os::MapProcessMemory(std::addressof(mapped_memory), process_handle, code_address, region.size, ro::impl::GenerateSecureRandom)) {
+            R_CONVERT(os::ResultOutOfAddressSpace, ro::ResultOutOfAddressSpace())
+        } R_END_TRY_CATCH;
 
-        /* Nintendo...does not check the return value of this map. We will check, instead of aborting if it fails. */
-        map::AutoCloseMap nrr_map(map_address, process_handle, code_address, nrr_heap_size);
-        R_TRY(nrr_map.GetResult());
+        /* If we fail, unmap the nrr memory. */
+        ON_RESULT_FAILURE_2 { os::UnmapProcessMemory(mapped_memory, process_handle, code_address, region.size); };
 
-        NrrHeader *nrr_header = reinterpret_cast<NrrHeader *>(map_address);
+        /* Validate the nrr header. */
+        NrrHeader *nrr_header = static_cast<NrrHeader *>(mapped_memory);
         R_TRY(ValidateNrr(nrr_header, nrr_heap_size, program_id, nrr_kind, enforce_nrr_kind));
 
-        /* Invalidation here actually prevents them from unmapping at scope exit. */
-        nrr_map.Invalidate();
-        nrr_mcm.Invalidate();
-
         /* Save a copy of the hash that we verified. */
-        crypto::GenerateSha256Hash(out_hash, out_hash_size, nrr_header->GetSignedArea(), nrr_header->GetSignedAreaSize());
+        crypto::GenerateSha256(out_hash, out_hash_size, nrr_header->GetSignedArea(), nrr_header->GetSignedAreaSize());
 
-        *out_header = nrr_header;
+        *out_header              = nrr_header;
         *out_mapped_code_address = code_address;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
-    Result UnmapNrr(Handle process_handle, const NrrHeader *header, u64 nrr_heap_address, u64 nrr_heap_size, u64 mapped_code_address) {
-        R_TRY(svcUnmapProcessMemory(reinterpret_cast<void *>(const_cast<NrrHeader *>(header)), process_handle, mapped_code_address, nrr_heap_size));
-        R_TRY(svcUnmapProcessCodeMemory(process_handle, mapped_code_address, nrr_heap_address, nrr_heap_size));
-        return ResultSuccess();
+    Result UnmapNrr(os::NativeHandle process_handle, const NrrHeader *header, u64 nrr_heap_address, u64 nrr_heap_size, u64 mapped_code_address) {
+        /* Unmap our process mapping. */
+        os::UnmapProcessMemory(const_cast<NrrHeader *>(header), process_handle, mapped_code_address, nrr_heap_size);
+
+        /* Unmap the code memory mapping. */
+        const os::ProcessMemoryRegion region = { nrr_heap_address, nrr_heap_size };
+        R_RETURN(os::UnmapProcessCodeMemory(process_handle, mapped_code_address, std::addressof(region), 1));
     }
 
     bool ValidateNrrHashTableEntry(const void *signed_area, size_t signed_area_size, size_t hashes_offset, size_t num_hashes, const void *nrr_hash, const u8 *hash_table, const void *desired_hash) {
         crypto::Sha256Generator sha256;
         sha256.Initialize();
-
 
         /* Hash data before the hash table. */
         const size_t pre_hash_table_size = hashes_offset - NrrHeader::GetSignedAreaOffset();

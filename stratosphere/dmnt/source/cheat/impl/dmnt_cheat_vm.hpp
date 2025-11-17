@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -43,6 +43,7 @@ namespace ams::dmnt::cheat::impl {
         CheatVmOpcodeType_SaveRestoreRegister = 0xC1,
         CheatVmOpcodeType_SaveRestoreRegisterMask = 0xC2,
         CheatVmOpcodeType_ReadWriteStaticRegister = 0xC3,
+        CheatVmOpcodeType_BeginExtendedKeypressConditionalBlock = 0xC4,
 
         /* This is a meta entry, and not a real opcode. */
         /* This is to facilitate multi-nybble instruction decoding. */
@@ -56,7 +57,10 @@ namespace ams::dmnt::cheat::impl {
 
     enum MemoryAccessType : u32 {
         MemoryAccessType_MainNso = 0,
-        MemoryAccessType_Heap = 1,
+        MemoryAccessType_Heap    = 1,
+        MemoryAccessType_Alias   = 2,
+        MemoryAccessType_Aslr    = 3,
+        MemoryAccessType_NonRelative   = 4,
     };
 
     enum ConditionalComparisonType : u32 {
@@ -82,6 +86,10 @@ namespace ams::dmnt::cheat::impl {
         RegisterArithmeticType_LogicalXor = 8,
 
         RegisterArithmeticType_None = 9,
+        RegisterArithmeticType_FloatAddition = 10,
+        RegisterArithmeticType_FloatSubtraction = 11,
+        RegisterArithmeticType_FloatMultiplication = 12,
+        RegisterArithmeticType_FloatDivision = 13,
     };
 
     enum StoreRegisterOffsetType : u32 {
@@ -136,11 +144,15 @@ namespace ams::dmnt::cheat::impl {
         u32 bit_width;
         MemoryAccessType mem_type;
         ConditionalComparisonType cond_type;
+        bool include_ofs_reg;
+        u32 ofs_reg_index;
         u64 rel_address;
         VmInt value;
     };
 
-    struct EndConditionalOpcode {};
+    struct EndConditionalOpcode {
+        bool is_else;
+    };
 
     struct ControlLoopOpcode {
         bool start_loop;
@@ -157,7 +169,8 @@ namespace ams::dmnt::cheat::impl {
         u32 bit_width;
         MemoryAccessType mem_type;
         u32 reg_index;
-        bool load_from_reg;
+        u8 load_from_reg;
+        u8 offset_register;
         u64 rel_address;
     };
 
@@ -179,6 +192,11 @@ namespace ams::dmnt::cheat::impl {
 
     struct BeginKeypressConditionalOpcode {
         u32 key_mask;
+    };
+
+    struct BeginExtendedKeypressConditionalOpcode {
+        u64 key_mask;
+        bool auto_repeat;
     };
 
     struct PerformArithmeticRegisterOpcode {
@@ -255,6 +273,7 @@ namespace ams::dmnt::cheat::impl {
             StoreStaticToAddressOpcode str_static;
             PerformArithmeticStaticOpcode perform_math_static;
             BeginKeypressConditionalOpcode begin_keypress_cond;
+            BeginExtendedKeypressConditionalOpcode begin_ext_keypress_cond;
             PerformArithmeticRegisterOpcode perform_math_reg;
             StoreRegisterToAddressOpcode str_register;
             BeginRegisterConditionalOpcode begin_reg_cond;
@@ -273,18 +292,18 @@ namespace ams::dmnt::cheat::impl {
             constexpr static size_t NumWritableStaticRegisters = 0x80;
             constexpr static size_t NumStaticRegisters = NumReadableStaticRegisters + NumWritableStaticRegisters;
         private:
-            size_t num_opcodes = 0;
-            size_t instruction_ptr = 0;
-            size_t condition_depth = 0;
-            bool decode_success = false;
-            u32 program[MaximumProgramOpcodeCount] = {0};
-            u64 registers[NumRegisters] = {0};
-            u64 saved_values[NumRegisters] = {0};
-            u64 static_registers[NumStaticRegisters] = {0};
-            size_t loop_tops[NumRegisters] = {0};
+            size_t m_num_opcodes = 0;
+            size_t m_instruction_ptr = 0;
+            size_t m_condition_depth = 0;
+            bool m_decode_success = false;
+            u32 m_program[MaximumProgramOpcodeCount] = {0};
+            u64 m_registers[NumRegisters] = {0};
+            u64 m_saved_values[NumRegisters] = {0};
+            u64 m_static_registers[NumStaticRegisters] = {0};
+            size_t m_loop_tops[NumRegisters] = {0};
         private:
             bool DecodeNextOpcode(CheatVmOpcode *out);
-            void SkipConditionalBlock();
+            void SkipConditionalBlock(bool is_if);
             void ResetState();
 
             /* For implementing the DebugLog opcode. */
@@ -299,32 +318,32 @@ namespace ams::dmnt::cheat::impl {
             static u64 GetVmInt(VmInt value, u32 bit_width);
             static u64 GetCheatProcessAddress(const CheatProcessMetadata* metadata, MemoryAccessType mem_type, u64 rel_address);
         public:
-            CheatVirtualMachine() { }
+            constexpr CheatVirtualMachine() = default;
 
             size_t GetProgramSize() {
-                return this->num_opcodes;
+                return m_num_opcodes;
             }
 
             bool LoadProgram(const CheatEntry *cheats, size_t num_cheats);
             void Execute(const CheatProcessMetadata *metadata);
 
             u64 GetStaticRegister(size_t which) const {
-                return this->static_registers[which];
+                return m_static_registers[which];
             }
 
             void SetStaticRegister(size_t which, u64 value) {
-                this->static_registers[which] = value;
+                m_static_registers[which] = value;
             }
 
             void ResetStaticRegisters() {
-                std::memset(this->static_registers, 0, sizeof(this->static_registers));
+                std::memset(m_static_registers, 0, sizeof(m_static_registers));
             }
     #ifdef DMNT_CHEAT_VM_DEBUG_LOG
         private:
-            fs::FileHandle debug_log_file;
-            s64 debug_log_file_offset;
-            bool has_debug_log_file;
-            char debug_log_format_buf[0x100];
+            fs::FileHandle m_debug_log_file = {};
+            s64 m_debug_log_file_offset = 0;
+            bool m_has_debug_log_file = false;
+            char m_debug_log_format_buf[0x100] = {0};
     #endif
     };
 

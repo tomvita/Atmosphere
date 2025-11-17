@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,13 +19,10 @@
 #include <stratosphere/fatal/fatal_types.hpp>
 #include <stratosphere/sf.hpp>
 
-namespace ams::fatal::impl {
+#define AMS_FATAL_I_SERVICE_INTERFACE_INFO(C, H)                                                                                                                                                                                        \
+    AMS_SF_METHOD_INFO(C, H, 0, Result, ThrowFatal,                       (Result error, const sf::ClientProcessId &client_pid),                                                                  (error, client_pid))                  \
+    AMS_SF_METHOD_INFO(C, H, 1, Result, ThrowFatalWithPolicy,             (Result error, const sf::ClientProcessId &client_pid, fatal::FatalPolicy policy),                                       (error, client_pid, policy))          \
+    AMS_SF_METHOD_INFO(C, H, 2, Result, ThrowFatalWithCpuContext,         (Result error, const sf::ClientProcessId &client_pid, fatal::FatalPolicy policy, const fatal::CpuContext &cpu_ctx),     (error, client_pid, policy, cpu_ctx)) \
+    AMS_SF_METHOD_INFO(C, H, 3, Result, ThrowFatalWithHashedTraceContext, (Result error, const sf::ClientProcessId &client_pid, ncm::ProgramId program_id, const fatal::HashedTraceContext &htc), (error, client_pid, program_id, htc))
 
-    #define AMS_FATAL_I_SERVICE_INTERFACE_INFO(C, H)                                                                                                                        \
-        AMS_SF_METHOD_INFO(C, H, 0, Result, ThrowFatal,               (Result error, const sf::ClientProcessId &client_pid))                                                \
-        AMS_SF_METHOD_INFO(C, H, 1, Result, ThrowFatalWithPolicy,     (Result error, const sf::ClientProcessId &client_pid, FatalPolicy policy))                            \
-        AMS_SF_METHOD_INFO(C, H, 2, Result, ThrowFatalWithCpuContext, (Result error, const sf::ClientProcessId &client_pid, FatalPolicy policy, const CpuContext &cpu_ctx))
-
-    AMS_SF_DEFINE_INTERFACE(IService, AMS_FATAL_I_SERVICE_INTERFACE_INFO)
-
-}
+AMS_SF_DEFINE_INTERFACE(ams::fatal::impl, IService, AMS_FATAL_I_SERVICE_INTERFACE_INFO, 0x91328766)

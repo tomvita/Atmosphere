@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,12 +17,13 @@
 
 namespace ams::fssystem {
 
+    #if defined(ATMOSPHERE_BOARD_NINTENDO_NX)
     namespace {
 
         constexpr inline size_t MaxExternalCodeFileSystem = 0x10;
 
         util::BoundedMap<ncm::ProgramId, fs::RemoteFileSystem, MaxExternalCodeFileSystem> g_ecs_map;
-        util::BoundedMap<ncm::ProgramId, os::ManagedHandle,    MaxExternalCodeFileSystem> g_hnd_map;
+        util::BoundedMap<ncm::ProgramId, os::NativeHandle,     MaxExternalCodeFileSystem> g_hnd_map;
 
     }
 
@@ -37,7 +38,7 @@ namespace ams::fssystem {
         if (auto *hnd = g_hnd_map.Find(program_id); hnd != nullptr) {
             /* Create a service using libnx bindings. */
             Service srv;
-            serviceCreate(std::addressof(srv), hnd->Move());
+            serviceCreate(std::addressof(srv), *hnd);
             g_hnd_map.Remove(program_id);
 
             /* Create a remote filesystem. */
@@ -52,21 +53,41 @@ namespace ams::fssystem {
         return nullptr;
     }
 
-    Result CreateExternalCode(Handle *out, ncm::ProgramId program_id) {
+    Result CreateExternalCode(os::NativeHandle *out, ncm::ProgramId program_id) {
         /* Create a handle pair. */
-        Handle server, client;
-        R_TRY(svcCreateSession(std::addressof(server), std::addressof(client), false, 0));
+        os::NativeHandle server, client;
+        R_TRY(svc::CreateSession(std::addressof(server), std::addressof(client), false, 0));
 
         /* Insert the handle into the map. */
         g_hnd_map.Emplace(program_id, client);
 
         *out = server;
-        return ResultSuccess();
+        R_SUCCEED();
     }
 
     void DestroyExternalCode(ncm::ProgramId program_id) {
         g_ecs_map.Remove(program_id);
-        g_hnd_map.Remove(program_id);
+
+        if (auto *hnd = g_hnd_map.Find(program_id); hnd != nullptr) {
+            os::CloseNativeHandle(*hnd);
+            g_hnd_map.Remove(program_id);
+        }
     }
+    #else
+    fs::fsa::IFileSystem *GetExternalCodeFileSystem(ncm::ProgramId program_id) {
+        AMS_UNUSED(program_id);
+        return nullptr;
+    }
+
+    Result CreateExternalCode(os::NativeHandle *out, ncm::ProgramId program_id) {
+        AMS_UNUSED(out, program_id);
+        R_THROW(fs::ResultNotImplemented());
+    }
+
+    void DestroyExternalCode(ncm::ProgramId program_id) {
+        AMS_UNUSED(program_id);
+    }
+    #endif
+
 
 }

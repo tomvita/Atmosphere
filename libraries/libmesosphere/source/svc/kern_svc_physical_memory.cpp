@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -24,15 +24,15 @@ namespace ams::kern::svc {
         Result SetHeapSize(uintptr_t *out_address, size_t size) {
             /* Validate size. */
             R_UNLESS(util::IsAligned(size, ams::svc::HeapSizeAlignment), svc::ResultInvalidSize());
-            R_UNLESS(size < ams::kern::MainMemorySize,                   svc::ResultInvalidSize());
+            R_UNLESS(size < ams::kern::MainMemorySizeMax,                svc::ResultInvalidSize());
 
             /* Set the heap size. */
-            KProcessAddress address;
+            KProcessAddress address = Null<KProcessAddress>;
             R_TRY(GetCurrentProcess().GetPageTable().SetHeapSize(std::addressof(address), size));
 
             /* Set the output. */
             *out_address = GetInteger(address);
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         Result SetUnsafeLimit(size_t limit) {
@@ -43,15 +43,16 @@ namespace ams::kern::svc {
             R_UNLESS(limit <= Kernel::GetMemoryManager().GetSize(KMemoryManager::Pool_Unsafe), svc::ResultOutOfRange());
 
             /* Set the size. */
-            return Kernel::GetUnsafeMemory().SetLimitSize(limit);
+            R_RETURN(Kernel::GetUnsafeMemory().SetLimitSize(limit));
         }
 
         Result MapPhysicalMemory(uintptr_t address, size_t size) {
             /* Validate address / size. */
-            R_UNLESS(util::IsAligned(address, PageSize), svc::ResultInvalidAddress());
-            R_UNLESS(util::IsAligned(size,    PageSize), svc::ResultInvalidSize());
-            R_UNLESS(size > 0,                           svc::ResultInvalidSize());
-            R_UNLESS((address < address + size),         svc::ResultInvalidMemoryRegion());
+            const size_t min_alignment = Kernel::GetMemoryManager().GetMinimumAlignment(GetCurrentProcess().GetMemoryPool());
+            R_UNLESS(util::IsAligned(address, min_alignment), svc::ResultInvalidAddress());
+            R_UNLESS(util::IsAligned(size,    min_alignment), svc::ResultInvalidSize());
+            R_UNLESS(size > 0,                                svc::ResultInvalidSize());
+            R_UNLESS((address < address + size),              svc::ResultInvalidMemoryRegion());
 
             /* Verify that the process has system resource. */
             auto &process = GetCurrentProcess();
@@ -64,15 +65,16 @@ namespace ams::kern::svc {
             /* Map the memory. */
             R_TRY(page_table.MapPhysicalMemory(address, size));
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         Result UnmapPhysicalMemory(uintptr_t address, size_t size) {
             /* Validate address / size. */
-            R_UNLESS(util::IsAligned(address, PageSize), svc::ResultInvalidAddress());
-            R_UNLESS(util::IsAligned(size,    PageSize), svc::ResultInvalidSize());
-            R_UNLESS(size > 0,                           svc::ResultInvalidSize());
-            R_UNLESS((address < address + size),         svc::ResultInvalidMemoryRegion());
+            const size_t min_alignment = Kernel::GetMemoryManager().GetMinimumAlignment(GetCurrentProcess().GetMemoryPool());
+            R_UNLESS(util::IsAligned(address, min_alignment), svc::ResultInvalidAddress());
+            R_UNLESS(util::IsAligned(size,    min_alignment), svc::ResultInvalidSize());
+            R_UNLESS(size > 0,                                svc::ResultInvalidSize());
+            R_UNLESS((address < address + size),              svc::ResultInvalidMemoryRegion());
 
             /* Verify that the process has system resource. */
             auto &process = GetCurrentProcess();
@@ -85,7 +87,7 @@ namespace ams::kern::svc {
             /* Unmap the memory. */
             R_TRY(page_table.UnmapPhysicalMemory(address, size));
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         Result MapPhysicalMemoryUnsafe(uintptr_t address, size_t size) {
@@ -106,7 +108,7 @@ namespace ams::kern::svc {
             /* Map the memory. */
             R_TRY(page_table.MapPhysicalMemoryUnsafe(address, size));
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
         Result UnmapPhysicalMemoryUnsafe(uintptr_t address, size_t size) {
@@ -124,7 +126,7 @@ namespace ams::kern::svc {
             /* Unmap the memory. */
             R_TRY(page_table.UnmapPhysicalMemoryUnsafe(address, size));
 
-            return ResultSuccess();
+            R_SUCCEED();
         }
 
     }
@@ -133,54 +135,54 @@ namespace ams::kern::svc {
 
     Result SetHeapSize64(ams::svc::Address *out_address, ams::svc::Size size) {
         static_assert(sizeof(*out_address) == sizeof(uintptr_t));
-        return SetHeapSize(reinterpret_cast<uintptr_t *>(out_address), size);
+        R_RETURN(SetHeapSize(reinterpret_cast<uintptr_t *>(out_address), size));
     }
 
     Result MapPhysicalMemory64(ams::svc::Address address, ams::svc::Size size) {
-        return MapPhysicalMemory(address, size);
+        R_RETURN(MapPhysicalMemory(address, size));
     }
 
     Result UnmapPhysicalMemory64(ams::svc::Address address, ams::svc::Size size) {
-        return UnmapPhysicalMemory(address, size);
+        R_RETURN(UnmapPhysicalMemory(address, size));
     }
 
     Result MapPhysicalMemoryUnsafe64(ams::svc::Address address, ams::svc::Size size) {
-        return MapPhysicalMemoryUnsafe(address, size);
+        R_RETURN(MapPhysicalMemoryUnsafe(address, size));
     }
 
     Result UnmapPhysicalMemoryUnsafe64(ams::svc::Address address, ams::svc::Size size) {
-        return UnmapPhysicalMemoryUnsafe(address, size);
+        R_RETURN(UnmapPhysicalMemoryUnsafe(address, size));
     }
 
     Result SetUnsafeLimit64(ams::svc::Size limit) {
-        return SetUnsafeLimit(limit);
+        R_RETURN(SetUnsafeLimit(limit));
     }
 
     /* ============================= 64From32 ABI ============================= */
 
     Result SetHeapSize64From32(ams::svc::Address *out_address, ams::svc::Size size) {
         static_assert(sizeof(*out_address) == sizeof(uintptr_t));
-        return SetHeapSize(reinterpret_cast<uintptr_t *>(out_address), size);
+        R_RETURN(SetHeapSize(reinterpret_cast<uintptr_t *>(out_address), size));
     }
 
     Result MapPhysicalMemory64From32(ams::svc::Address address, ams::svc::Size size) {
-        return MapPhysicalMemory(address, size);
+        R_RETURN(MapPhysicalMemory(address, size));
     }
 
     Result UnmapPhysicalMemory64From32(ams::svc::Address address, ams::svc::Size size) {
-        return UnmapPhysicalMemory(address, size);
+        R_RETURN(UnmapPhysicalMemory(address, size));
     }
 
     Result MapPhysicalMemoryUnsafe64From32(ams::svc::Address address, ams::svc::Size size) {
-        return MapPhysicalMemoryUnsafe(address, size);
+        R_RETURN(MapPhysicalMemoryUnsafe(address, size));
     }
 
     Result UnmapPhysicalMemoryUnsafe64From32(ams::svc::Address address, ams::svc::Size size) {
-        return UnmapPhysicalMemoryUnsafe(address, size);
+        R_RETURN(UnmapPhysicalMemoryUnsafe(address, size));
     }
 
     Result SetUnsafeLimit64From32(ams::svc::Size limit) {
-        return SetUnsafeLimit(limit);
+        R_RETURN(SetUnsafeLimit(limit));
     }
 
 }

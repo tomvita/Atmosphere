@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -14,47 +14,49 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #pragma once
-#include "fs_common.hpp"
-#include "fs_istorage.hpp"
-#include "impl/fs_newable.hpp"
+#include <stratosphere/fs/fs_common.hpp>
+#include <stratosphere/fs/fs_istorage.hpp>
+#include <stratosphere/fs/impl/fs_newable.hpp>
 
 namespace ams::fs {
 
+    #if defined(ATMOSPHERE_OS_HORIZON)
     class RemoteStorage : public IStorage, public impl::Newable {
+        NON_COPYABLE(RemoteStorage);
+        NON_MOVEABLE(RemoteStorage);
         private:
-            std::unique_ptr<::FsStorage, impl::Deleter> base_storage;
+            ::FsStorage m_base_storage;
         public:
-            RemoteStorage(::FsStorage &s) {
-                this->base_storage = impl::MakeUnique<::FsStorage>();
-                *this->base_storage = s;
-            }
+            RemoteStorage(::FsStorage &s) : m_base_storage(s) { /* ... */}
 
-            virtual ~RemoteStorage() { fsStorageClose(this->base_storage.get()); }
+            virtual ~RemoteStorage() { fsStorageClose(std::addressof(m_base_storage)); }
         public:
             virtual Result Read(s64 offset, void *buffer, size_t size) override {
-                return fsStorageRead(this->base_storage.get(), offset, buffer, size);
+                R_RETURN(fsStorageRead(std::addressof(m_base_storage), offset, buffer, size));
             };
 
             virtual Result Write(s64 offset, const void *buffer, size_t size) override {
-                return fsStorageWrite(this->base_storage.get(), offset, buffer, size);
+                R_RETURN(fsStorageWrite(std::addressof(m_base_storage), offset, buffer, size));
             };
 
             virtual Result Flush() override {
-                return fsStorageFlush(this->base_storage.get());
+                R_RETURN(fsStorageFlush(std::addressof(m_base_storage)));
             };
 
             virtual Result GetSize(s64 *out_size) override {
-                return fsStorageGetSize(this->base_storage.get(), out_size);
+                R_RETURN(fsStorageGetSize(std::addressof(m_base_storage), out_size));
             };
 
             virtual Result SetSize(s64 size) override {
-                return fsStorageSetSize(this->base_storage.get(), size);
+                R_RETURN(fsStorageSetSize(std::addressof(m_base_storage), size));
             };
 
             virtual Result OperateRange(void *dst, size_t dst_size, OperationId op_id, s64 offset, s64 size, const void *src, size_t src_size) override {
                 /* TODO: How to deal with this? */
-                return fs::ResultUnsupportedOperation();
+                AMS_UNUSED(dst, dst_size, op_id, offset, size, src, src_size);
+                R_THROW(fs::ResultUnsupportedOperation());
             };
     };
+    #endif
 
 }

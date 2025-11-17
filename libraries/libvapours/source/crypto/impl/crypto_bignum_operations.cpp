@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -45,7 +45,7 @@ namespace ams::crypto::impl {
             return static_cast<BigNum::Word>(half) << BITSIZEOF(BigNum::HalfWord);
         }
 
-        constexpr ALWAYS_INLINE BigNum::Word ToLowerHalf(BigNum::HalfWord half) {
+        [[maybe_unused]] constexpr ALWAYS_INLINE BigNum::Word ToLowerHalf(BigNum::HalfWord half) {
             static_assert(sizeof(BigNum::Word) == sizeof(BigNum::HalfWord) * 2);
             return static_cast<BigNum::Word>(half);
         }
@@ -257,7 +257,7 @@ namespace ams::crypto::impl {
         if (!(power_1.IsValid() && power_2.IsValid() && power_3.IsValid())) {
             return false;
         }
-        decltype(power_1)* powers[3] = { &power_1, &power_2, &power_3 };
+        decltype(power_1)* powers[3] = { std::addressof(power_1), std::addressof(power_2), std::addressof(power_3) };
 
         /* Set the powers of src. */
         Copy(power_1.GetBuffer(), src, mod_words);
@@ -421,5 +421,70 @@ namespace ams::crypto::impl {
 
         return true;
     }
+
+    #if !defined(ATMOSPHERE_ARCH_ARM64)
+    BigNum::Word BigNum::Add(Word *dst, const Word *lhs, const Word *rhs, size_t num_words) {
+        Word carry = 0;
+
+        for (size_t i = 0; i < num_words; ++i) {
+            Word v;
+            if ((v = lhs[i] + carry) < carry) {
+                v = rhs[i];
+            } else if ((v += rhs[i]) < rhs[i]) {
+                carry = 1;
+            } else {
+                carry = 0;
+            }
+
+            dst[i] = v;
+        }
+
+        return carry;
+    }
+
+    BigNum::Word BigNum::Sub(Word *dst, const Word *lhs, const Word *rhs, size_t num_words) {
+        Word borrow = 0;
+
+        for (size_t i = 0; i < num_words; ++i) {
+            Word v;
+            if ((v = lhs[i] - borrow) > (BigNum::MaxWord - borrow)) {
+                v = BigNum::MaxWord - rhs[i];
+            } else if ((v -= rhs[i]) > (BigNum::MaxWord - rhs[i])) {
+                borrow = 1;
+            } else {
+                borrow = 0;
+            }
+
+            dst[i] = v;
+        }
+
+        return borrow;
+    }
+
+    BigNum::Word BigNum::MultAdd(Word *dst, const Word *w, size_t num_words, Word mult) {
+        /* If multiplying by zero, nothing to do. */
+        if (mult == 0) {
+            return 0;
+        }
+
+        Word carry = 0, work[2];
+        for (size_t i = 0; i < num_words; i++) {
+            /* Multiply, calculate carry for next. */
+            MultWord(work, mult, w[i]);
+            if ((dst[i] += carry) < carry) {
+                carry = 1;
+            } else {
+                carry = 0;
+            }
+
+            if ((dst[i] += work[0]) < work[0]) {
+                carry++;
+            }
+            carry += work[1];
+        }
+
+        return carry;
+    }
+    #endif
 
 }

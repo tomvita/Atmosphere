@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,6 +19,7 @@
 #include <vapours/assert.hpp>
 #include <vapours/util.hpp>
 #include <vapours/crypto/impl/crypto_sha256_impl.hpp>
+#include <vapours/crypto/impl/crypto_sha256_impl_constexpr.hpp>
 
 namespace ams::crypto {
 
@@ -46,39 +47,55 @@ namespace ams::crypto {
             };
             static constexpr size_t Asn1IdentifierSize = util::size(Asn1Identifier);
         private:
-            Impl impl;
+            Impl m_impl{};
         public:
-            Sha256Generator() { /* ... */ }
+            Sha256Generator() = default;
 
             void Initialize() {
-                this->impl.Initialize();
+                m_impl.Initialize();
             }
 
             void Update(const void *data, size_t size) {
-                this->impl.Update(data, size);
+                m_impl.Update(data, size);
             }
 
             void GetHash(void *dst, size_t size) {
-                this->impl.GetHash(dst, size);
+                m_impl.GetHash(dst, size);
             }
 
             void InitializeWithContext(const Sha256Context *context) {
-                this->impl.InitializeWithContext(context);
+                m_impl.InitializeWithContext(context);
             }
 
             size_t GetContext(Sha256Context *context) const {
-                return this->impl.GetContext(context);
+                return m_impl.GetContext(context);
             }
 
             size_t GetBufferedDataSize() const {
-                return this->impl.GetBufferedDataSize();
+                return m_impl.GetBufferedDataSize();
             }
 
             void GetBufferedData(void *dst, size_t dst_size) const {
-                return this->impl.GetBufferedData(dst, dst_size);
+                return m_impl.GetBufferedData(dst, dst_size);
             }
     };
 
-    void GenerateSha256Hash(void *dst, size_t dst_size, const void *src, size_t src_size);
+    void GenerateSha256(void *dst, size_t dst_size, const void *src, size_t src_size);
+
+    ALWAYS_INLINE void GenerateSha256Hash(void *dst, size_t dst_size, const void *src, size_t src_size) {
+        return GenerateSha256(dst, dst_size, src, src_size);
+    }
+
+    template<typename T, typename = typename std::enable_if<std::same_as<T, u8> || std::same_as<T, s8> || std::same_as<T, char> || std::same_as<T, unsigned char>>::type>
+    constexpr ALWAYS_INLINE void GenerateSha256(u8 *dst, size_t dst_size, const T *src, size_t src_size) {
+        if (std::is_constant_evaluated()) {
+            impl::Sha256CompileTimeImpl sha;
+            sha.Initialize();
+            sha.Update(src, src_size);
+            sha.GetHash(dst, dst_size);
+        } else {
+            return GenerateSha256(static_cast<void *>(dst), dst_size, static_cast<const void *>(src), src_size);
+        }
+    }
 
 }

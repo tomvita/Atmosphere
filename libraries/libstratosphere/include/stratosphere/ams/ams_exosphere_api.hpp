@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -15,14 +15,17 @@
  */
 
 #pragma once
-#include "ams_types.hpp"
+#include <stratosphere/ams/ams_types.hpp>
 
 namespace ams::exosphere {
 
     ApiInfo GetApiInfo();
 
+    #if defined(ATMOSPHERE_BOARD_NINTENDO_NX)
     void ForceRebootToRcm();
     void ForceRebootToIramPayload();
+    void ForceRebootToFatalError();
+    void ForceRebootByPmic();
     void ForceShutdown();
 
     bool IsRcmBugPatched();
@@ -34,6 +37,7 @@ namespace ams::exosphere {
 
     void CopyToIram(uintptr_t iram_dst, const void *dram_src, size_t size);
     void CopyFromIram(void *dram_dst, uintptr_t iram_src, size_t size);
+    #endif
 
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020 Atmosphère-NX
+ * Copyright (c) Atmosphère-NX
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -16,17 +16,13 @@
 #pragma once
 #include <stratosphere.hpp>
 
+#define AMS_BPC_MITM_INTERFACE_INFO(C, H)                       \
+    AMS_SF_METHOD_INFO(C, H, 0, Result, ShutdownSystem, (), ()) \
+    AMS_SF_METHOD_INFO(C, H, 1, Result, RebootSystem,   (), ())
+
+AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::bpc::impl, IBpcMitmInterface, AMS_BPC_MITM_INTERFACE_INFO, 0xF6C277FD)
+
 namespace ams::mitm::bpc {
-
-    namespace impl {
-
-        #define AMS_BPC_MITM_INTERFACE_INFO(C, H)                   \
-            AMS_SF_METHOD_INFO(C, H, 0, Result, ShutdownSystem, ()) \
-            AMS_SF_METHOD_INFO(C, H, 1, Result, RebootSystem,   ())
-
-        AMS_SF_DEFINE_MITM_INTERFACE(IBpcMitmInterface, AMS_BPC_MITM_INTERFACE_INFO)
-
-    }
 
     class BpcMitmService : public sf::MitmServiceImplBase {
         public:
@@ -34,11 +30,12 @@ namespace ams::mitm::bpc {
         public:
             static bool ShouldMitm(const sm::MitmProcessInfo &client_info) {
                 /* We will mitm:
-                 * - am, to intercept the Reboot/Power buttons in the overlay menu.
+                 * - am (omm on 14.0.0+), to intercept the Reboot/Power buttons in the overlay menu.
                  * - fatal, to simplify payload reboot logic significantly
                  * - hbl, to allow homebrew to take advantage of the feature.
                  */
                 return client_info.program_id == ncm::SystemProgramId::Am ||
+                       client_info.program_id == ncm::SystemProgramId::Omm ||
                        client_info.program_id == ncm::SystemProgramId::Fatal ||
                        client_info.override_status.IsHbl();
             }
