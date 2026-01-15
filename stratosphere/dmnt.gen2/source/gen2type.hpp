@@ -54,6 +54,7 @@
             STACK,
             R_MATCH,
             EXCLUSIVE_SEARCH,
+            UNIQUE_SEARCH,
             END_OF_TYPE,
         } NX_PACKED;
         typedef struct {
