@@ -25,6 +25,7 @@
 #include "dns_mitm/dnsmitm_module.hpp"
 #include "sysupdater/sysupdater_module.hpp"
 #include "mitm_pm/mitm_pm_module.hpp"
+#include "breeze_mitm/breezemitm_module.hpp"
 
 namespace ams::mitm {
 
@@ -39,6 +40,7 @@ namespace ams::mitm {
             ModuleId_DnsMitm,
             ModuleId_Sysupdater,
             ModuleId_PmService,
+            /* ModuleId_BreezeMitm, — disabled for debugging */
 
             ModuleId_Count,
         };
@@ -73,6 +75,7 @@ namespace ams::mitm {
             GetModuleDefinition<socket::resolver::MitmModule>(),
             GetModuleDefinition<sysupdater::MitmModule>(),
             GetModuleDefinition<pm::MitmModule>(),
+            /* GetModuleDefinition<breeze::MitmModule>(), — disabled for debugging */
         };
 
     }

@@ -22,6 +22,7 @@ namespace ams::mitm::fs {
     void OpenGlobalSdCardFileSystem();
 
     /* Utilities. */
+    Result DeleteSdFile(const char *path);
     Result DeleteAtmosphereSdFile(const char *path);
     Result CreateSdFile(const char *path, s64 size, s32 option);
     Result CreateAtmosphereSdFile(const char *path, s64 size, s32 option);
