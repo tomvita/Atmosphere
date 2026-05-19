@@ -165,46 +165,36 @@ namespace ams::dmnt {
 
 namespace ams::dmnt {
 
-    //#define AMS_DMNT2_ENABLE_SD_CARD_DEBUG_LOG
+    #define AMS_DMNT2_ENABLE_SD_CARD_DEBUG_LOG
 
     #if defined(AMS_DMNT2_ENABLE_SD_CARD_DEBUG_LOG)
 
     namespace {
 
-        alignas(0x40) constinit u8 g_buffer[os::MemoryPageSize * 4];
-        constinit lmem::HeapHandle g_debug_log_heap;
-        constinit fs::FileHandle g_debug_log_file;
-
         constinit os::SdkMutex g_fs_mutex;
         constinit s64 g_fs_offset = 0;
-
-        void *Allocate(size_t size) {
-            return lmem::AllocateFromExpHeap(g_debug_log_heap, size);
-        }
-
-        void Deallocate(void *p, size_t size) {
-            AMS_UNUSED(size);
-            return lmem::FreeToExpHeap(g_debug_log_heap, p);
-        }
+        constinit bool g_debug_log_initialized = false;
 
     }
 
     void InitializeDebugLog() {
-        g_debug_log_heap = lmem::CreateExpHeap(g_buffer, sizeof(g_buffer), lmem::CreateOption_ThreadSafe);
+        std::scoped_lock lk(g_fs_mutex);
+        if (g_debug_log_initialized) {
+            return;
+        }
 
-        fs::SetAllocator(Allocate, Deallocate);
-        fs::InitializeForSystem();
-        fs::SetEnabledAutoAbort(false);
-
-        R_ABORT_UNLESS(fs::MountSdCard("sdmc"));
-
+        /* sdmc is already mounted by InitializeSystemModule, so we can use it directly. */
         fs::DeleteFile("sdmc:/dmnt2.log");
-        R_ABORT_UNLESS(fs::CreateFile("sdmc:/dmnt2.log", 0));
-        R_ABORT_UNLESS(fs::OpenFile(std::addressof(g_debug_log_file), "sdmc:/dmnt2.log", fs::OpenMode_Write | fs::OpenMode_AllowAppend));
+        if (R_SUCCEEDED(fs::CreateFile("sdmc:/dmnt2.log", 0))) {
+            g_debug_log_initialized = true;
+        }
     }
 
     void DebugLog(const char *prefix, const char *fmt, ...) {
-        /* Do nothing. */
+        if (!g_debug_log_initialized) {
+            return;
+        }
+
         char buffer[0x200];
         {
             const auto prefix_len = std::strlen(prefix);
@@ -219,8 +209,13 @@ namespace ams::dmnt {
         const auto len = std::strlen(buffer);
 
         std::scoped_lock lk(g_fs_mutex);
-        R_ABORT_UNLESS(fs::WriteFile(g_debug_log_file, g_fs_offset, buffer, len, fs::WriteOption::Flush));
-        g_fs_offset += len;
+        fs::FileHandle log_file;
+        if (R_SUCCEEDED(fs::OpenFile(std::addressof(log_file), "sdmc:/dmnt2.log", fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
+            ON_SCOPE_EXIT { fs::CloseFile(log_file); };
+            if (R_SUCCEEDED(fs::WriteFile(log_file, g_fs_offset, buffer, len, fs::WriteOption::Flush))) {
+                g_fs_offset += len;
+            }
+        }
     }
 
     #else

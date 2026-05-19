@@ -20,6 +20,9 @@ namespace ams::dmnt::cheat::impl {
 
     void InitializeCheatManager();
 
+    os::NativeHandle GetSharedDebugHandle();
+    void SuspendDebugEvents(bool suspend);
+
     bool GetHasActiveCheatProcess();
     os::NativeHandle GetCheatProcessEventHandle();
     Result GetCheatProcessMetadata(CheatProcessMetadata *out);
@@ -28,7 +31,7 @@ namespace ams::dmnt::cheat::impl {
     Result ResumeCheatProcess();
     Result ForceCloseCheatProcess();
 
-    Result BreakPointUnsafe(u64 process_addr, void *out_data, size_t size);
+    Result ReadCheatProcessMemoryUnsafe(u64 process_addr, void *out_data, size_t size);
     Result WriteCheatProcessMemoryUnsafe(u64 process_addr, void *data, size_t size);
 
     Result PauseCheatProcessUnsafe();
@@ -36,7 +39,7 @@ namespace ams::dmnt::cheat::impl {
 
     Result GetCheatProcessMappingCount(u64 *out_count);
     Result GetCheatProcessMappings(svc::MemoryInfo *mappings, size_t max_count, u64 *out_count, u64 offset);
-    Result BreakPoint(u64 proc_addr, void *out_data, size_t size);
+    Result ReadCheatProcessMemory(u64 proc_addr, void *out_data, size_t size);
     Result WriteCheatProcessMemory(u64 proc_addr, const void *data, size_t size);
     Result QueryCheatProcessMemory(svc::MemoryInfo *mapping, u64 address);
 

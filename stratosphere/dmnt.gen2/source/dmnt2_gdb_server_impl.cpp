@@ -14,7 +14,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <stratosphere.hpp>
-#include "c:\GitHub\Atmosphere\libraries\libstratosphere\source\dmnt\dmntcht.h"
+#include "cheat/impl/dmnt_cheat_api.hpp"
 #include "dmnt2_debug_log.hpp"
 #include "dmnt2_gdb_server_impl.hpp"
 
@@ -54,6 +54,7 @@ namespace ams::dmnt {
                     case DETACH:
                         m_watch_data.address = 0;
                         m_debug_process.Detach();
+                        dmnt::cheat::impl::SuspendDebugEvents(false);
                         break;
                     case ATTACH:
                         if (!this->HasDebugProcess()) {
@@ -962,6 +963,7 @@ namespace ams::dmnt {
 
     }
     void GdbServerImpl::Gen2Attach() {
+        dmnt::cheat::impl::SuspendDebugEvents(true);
         /* Set our process id. */
         m_process_id = {m_watch_data.next_pid};
 
@@ -986,6 +988,7 @@ namespace ams::dmnt {
     GdbServerImpl::~GdbServerImpl() {
         /* Set ourselves as killed. */
         m_killed = true;
+        dmnt::cheat::impl::SuspendDebugEvents(false);
 
         /* Signal to our events thread. */
         {
@@ -2552,17 +2555,11 @@ namespace ams::dmnt {
             }
         } else if (ParsePrefix(command, "detach")) {
             m_debug_process.Detach();
+            dmnt::cheat::impl::SuspendDebugEvents(false);
             AppendReplyFormat(reply_cur, reply_end, "Game detached\n");
         } else if (ParsePrefix(command, "gen2")) {
-            int rc;
-            if (R_FAILED(rc = dmntchtInitialize())) {
-                AppendReplyFormat(reply_cur, reply_end, "dmntchtInitialize rc=%x\n",rc);
-            } else {
-                dmntchtResumeCheatProcess();
-                dmntchtForceCloseCheatProcess();
-                dmntchtExit();
-                AppendReplyFormat(reply_cur, reply_end, "Game ready for Gen2\n");
-            };
+            dmnt::cheat::impl::SuspendDebugEvents(true);
+            AppendReplyFormat(reply_cur, reply_end, "Game ready for Gen2\n");
         } else if (ParsePrefix(command, "attach")) {
             if (!this->HasDebugProcess()) {
                 /* Get the process id. */
@@ -2901,18 +2898,21 @@ namespace ams::dmnt {
                     /* Get all process ids. */
                     u64 process_ids[0x50];
                     s32 num_process_ids;
-                    R_ABORT_UNLESS(svc::GetProcessList(std::addressof(num_process_ids), process_ids, util::size(process_ids)));
+                    if (R_FAILED(svc::GetProcessList(std::addressof(num_process_ids), process_ids, util::size(process_ids)))) {
+                        num_process_ids = 0;
+                    }
 
                     /* Send all processes. */
                     for (s32 i = 0; i < num_process_ids; ++i) {
                         svc::Handle handle;
                         if (R_SUCCEEDED(svc::DebugActiveProcess(std::addressof(handle), process_ids[i]))) {
-                            ON_SCOPE_EXIT { R_ABORT_UNLESS(svc::CloseHandle(handle)); };
+                            ON_SCOPE_EXIT { static_cast<void>(svc::CloseHandle(handle)); };
 
                             /* Get the create process event. */
                             svc::DebugEventInfo d;
-                            R_ABORT_UNLESS(svc::GetDebugEvent(std::addressof(d), handle));
-                            AMS_ABORT_UNLESS(d.type == svc::DebugEvent_CreateProcess);
+                            if (R_FAILED(svc::GetDebugEvent(std::addressof(d), handle)) || d.type != svc::DebugEvent_CreateProcess) {
+                                continue;
+                            }
 
                             AppendReplyFormat(dst_cur, dst_end, "<item>\n<column name=\"pid\">%lu</column>\n<column name=\"command\">%s</column>\n</item>\n", d.info.create_process.process_id, d.info.create_process.name);
                         }

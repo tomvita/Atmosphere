@@ -422,7 +422,7 @@ namespace ams::boot2 {
             LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::DmntGen2, ncm::StorageId::None), 0);
             LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Tma,  ncm::StorageId::BuiltInSystem), 0);
         } else {
-            LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Dmnt, ncm::StorageId::None), 0);
+            LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::DmntGen2, ncm::StorageId::None), 0);
             LaunchProgram(nullptr, ncm::ProgramLocation::Make(ncm::SystemProgramId::Tma,  ncm::StorageId::BuiltInSystem), 0);
         }
 

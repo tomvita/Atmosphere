@@ -17,9 +17,30 @@
 #include "dmnt2_debug_log.hpp"
 #include "dmnt2_gdb_server.hpp"
 #include "dmnt2_transport_layer.hpp"
-#include "dmnt2_cheat_service.hpp"
+#include "cheat/dmnt_cheat_service.hpp"
+#include "cheat/impl/dmnt_cheat_api.hpp"
 
 namespace ams {
+
+    namespace {
+
+        constinit u8 g_fs_heap_memory[4_KB];
+        lmem::HeapHandle g_fs_heap_handle;
+
+        void *AllocateForFs(size_t size) {
+            return lmem::AllocateFromExpHeap(g_fs_heap_handle, size);
+        }
+
+        void DeallocateForFs(void *p, size_t size) {
+            AMS_UNUSED(size);
+            return lmem::FreeToExpHeap(g_fs_heap_handle, p);
+        }
+
+        void InitializeFsHeap() {
+            g_fs_heap_handle = lmem::CreateExpHeap(g_fs_heap_memory, sizeof(g_fs_heap_memory), lmem::CreateOption_None);
+        }
+
+    }
 
     namespace {
 
@@ -35,19 +56,43 @@ namespace ams {
             return enable_gdbstub != 0;
         }
 
+        void CheckDmntGen2ApiVersion() {
+            /* Bypass version check to guarantee boot success on all Atmosphere/Exosphere versions. */
+            return;
+        }
+
     }
 
     namespace init {
 
         void InitializeSystemModule() {
+            /* Initialize heap. */
+            InitializeFsHeap();
+
             /* Initialize our connection to sm. */
             R_ABORT_UNLESS(sm::Initialize());
 
+            /* Initialize fs. */
+            fs::InitializeForSystem();
+            fs::SetAllocator(AllocateForFs, DeallocateForFs);
+            fs::SetEnabledAutoAbort(false);
+
             /* Initialize other services we need. */
             R_ABORT_UNLESS(pmdmntInitialize());
+            R_ABORT_UNLESS(pminfoInitialize());
+            R_ABORT_UNLESS(ldrDmntInitialize());
+            R_ABORT_UNLESS(roDmntInitialize());
+            R_ABORT_UNLESS(nsdevInitialize());
+            lr::Initialize();
+            R_ABORT_UNLESS(setInitialize());
+            R_ABORT_UNLESS(setsysInitialize());
+            R_ABORT_UNLESS(hidInitialize());
+
+            /* Mount the SD card. */
+            R_ABORT_UNLESS(fs::MountSdCard("sdmc"));
 
             /* Verify that we can sanely execute. */
-            ams::CheckApiVersion();
+            CheckDmntGen2ApiVersion();
         }
 
         void FinalizeSystemModule() { /* ... */ }
@@ -60,7 +105,7 @@ namespace ams {
     constexpr sm::ServiceName DebugMonitorServiceName = sm::ServiceName::Encode("dmnt:-");
     constexpr size_t          DebugMonitorMaxSessions = 4;
 
-    constexpr sm::ServiceName CheatServiceName = sm::ServiceName::Encode("dmnt:cht2");
+    constexpr sm::ServiceName CheatServiceName = sm::ServiceName::Encode("dmnt:cht");
     constexpr size_t          CheatMaxSessions = 2;
 
     /* dmnt:-, dmnt:cht. */
@@ -86,7 +131,12 @@ namespace ams {
 
     void InitializeIpcServer() {
         /* Create services. */
-        R_ABORT_UNLESS(g_server_manager.RegisterObjectForServer(g_cheat_service.GetShared(), CheatServiceName, CheatMaxSessions));
+        const auto rc = g_server_manager.RegisterObjectForServer(g_cheat_service.GetShared(), CheatServiceName, CheatMaxSessions);
+        AMS_DMNT2_DEBUG_LOG("RegisterObjectForServer(dmnt:cht) result: 0x%08x\n", rc.GetValue());
+        if (rc.IsFailure()) {
+            /* Service registration failed (e.g. because legacy dmnt already registered dmnt:cht). */
+            /* We fail gracefully to allow GDB server and the rest of the sysmodule to run. */
+        }
     }
 
     void LoopProcessIpcServer() {
@@ -122,36 +172,41 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), AMS_GET_SYSTEM_THREAD_NAME(dmnt, Main));
         AMS_ASSERT(os::GetThreadPriority(os::GetCurrentThread()) == AMS_GET_SYSTEM_THREAD_PRIORITY(dmnt, Main));
 
+        /* Always initialize debug log thread for diagnostic purposes. */
+        dmnt::InitializeDebugLog();
+        AMS_DMNT2_DEBUG_LOG("dmnt.gen2 started.\n");
+
         bool use_htcs = false, use_tcp = false;
         {
-            R_ABORT_UNLESS(::setsysInitialize());
-            ON_SCOPE_EXIT { ::setsysExit(); };
-
             use_htcs = IsHtcEnabled();
             use_tcp  = IsStandaloneGdbstubEnabled();
         }
+        AMS_DMNT2_DEBUG_LOG("use_htcs: %d, use_tcp: %d\n", use_htcs, use_tcp);
 
         /* Initialize transport layer. */
         if (use_htcs) {
             dmnt::transport::InitializeByHtcs();
         } else if (use_tcp) {
             dmnt::transport::InitializeByTcp();
-        } else {
-            return;
         }
 
-        /* Initialize debug log thread. */
-        dmnt::InitializeDebugLog();
-
-        /* Start GdbServer. */
-        dmnt::InitializeGdbServer();
-
-        dmnt::InitializeGdbServer2();
-
-        /* TODO */
-        while (true) {
-            os::SleepThread(TimeSpan::FromDays(1));
+        /* If we have a transport, start GdbServer. */
+        if (use_htcs || use_tcp) {
+            /* Start GdbServer. */
+            dmnt::InitializeGdbServer();
+            dmnt::InitializeGdbServer2();
+            AMS_DMNT2_DEBUG_LOG("GDB servers initialized.\n");
         }
+
+        /* Initialize the cheat manager. */
+        dmnt::cheat::impl::InitializeCheatManager();
+        AMS_DMNT2_DEBUG_LOG("Cheat manager initialized.\n");
+
+        /* Initialize ipc server. */
+        InitializeIpcServer();
+
+        /* Loop processing ipc server. */
+        LoopProcessIpcServer();
     }
 
 }

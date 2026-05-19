@@ -33,9 +33,17 @@ namespace ams::dmnt {
         constinit os::ThreadType g_server_thread, g_server_thread2;
 
         constinit util::TypedStorage<GdbServerImpl> g_gdb_server;
+        std::atomic<bool> g_gdb_server_constructed = false;
+        constinit os::SdkMutex g_gdb_server_lock;
+
         void GdbServerThreadFunction2(void *) {
             while (true){
-                util::GetReference(g_gdb_server).gen2_loop();
+                {
+                    std::scoped_lock lk(g_gdb_server_lock);
+                    if (g_gdb_server_constructed.load(std::memory_order_acquire)) {
+                        util::GetReference(g_gdb_server).gen2_loop();
+                    }
+                }
                 svcSleepThread(50'000'000);
                 // os::SleepThread(TimeSpan::FromMilliSeconds(100));
             };
@@ -66,18 +74,41 @@ namespace ams::dmnt {
                     int client_fd;
                     while (true) {
                         {
-                            util::ConstructAt(g_gdb_server, 500, g_events_thread_stack, sizeof(g_events_thread_stack));
-                            util::GetReference(g_gdb_server).gen2_server_on = 2;
-                            ON_SCOPE_EXIT { util::GetReference(g_gdb_server).gen2_server_on = 0; util::DestroyAt(g_gdb_server); };
+                            {
+                                std::scoped_lock lk(g_gdb_server_lock);
+                                util::ConstructAt(g_gdb_server, 500, g_events_thread_stack, sizeof(g_events_thread_stack));
+                                util::GetReference(g_gdb_server).gen2_server_on = 2;
+                                g_gdb_server_constructed.store(true, std::memory_order_release);
+                            }
+                            
                             /* Try to accept a client. */
-                            if (client_fd = transport::Accept(fd); client_fd < 0) {
+                            int temp_fd = transport::Accept(fd);
+
+                            {
+                                std::scoped_lock lk(g_gdb_server_lock);
+                                g_gdb_server_constructed.store(false, std::memory_order_release);
+                                util::GetReference(g_gdb_server).gen2_server_on = 0;
+                                util::DestroyAt(g_gdb_server);
+                            }
+
+                            if (temp_fd < 0) {
                                 break;
                             }
+                            client_fd = temp_fd;
                         }
                         {
                             /* Create gdb server for the socket. */
-                            util::ConstructAt(g_gdb_server, client_fd, g_events_thread_stack, sizeof(g_events_thread_stack));
-                            ON_SCOPE_EXIT { util::DestroyAt(g_gdb_server); };
+                            {
+                                std::scoped_lock lk(g_gdb_server_lock);
+                                util::ConstructAt(g_gdb_server, client_fd, g_events_thread_stack, sizeof(g_events_thread_stack));
+                                g_gdb_server_constructed.store(true, std::memory_order_release);
+                            }
+
+                            ON_SCOPE_EXIT {
+                                std::scoped_lock lk(g_gdb_server_lock);
+                                g_gdb_server_constructed.store(false, std::memory_order_release);
+                                util::DestroyAt(g_gdb_server);
+                            };
 
                             /* Process for the server. */
                             util::GetReference(g_gdb_server).LoopProcess();

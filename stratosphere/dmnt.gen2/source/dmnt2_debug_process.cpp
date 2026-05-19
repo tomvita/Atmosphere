@@ -16,6 +16,7 @@
 #include <stratosphere.hpp>
 #include "dmnt2_debug_log.hpp"
 #include "dmnt2_debug_process.hpp"
+#include "cheat/impl/dmnt_cheat_api.hpp"
 
 namespace ams::dmnt {
 
@@ -29,7 +30,11 @@ namespace ams::dmnt {
 
     Result DebugProcess::Attach(os::ProcessId process_id, bool start_process) {
         /* Attach to the process. */
-        R_TRY(svc::DebugActiveProcess(std::addressof(m_debug_handle), process_id.value));
+        if (dmnt::cheat::impl::GetSharedDebugHandle() != os::InvalidNativeHandle) {
+            m_debug_handle = dmnt::cheat::impl::GetSharedDebugHandle();
+        } else {
+            R_TRY(svc::DebugActiveProcess(std::addressof(m_debug_handle), process_id.value));
+        }
 
         /* If necessary, start the process. */
         if (start_process) {
@@ -60,7 +65,9 @@ namespace ams::dmnt {
             m_hardware_breakpoints.ClearAll();
             m_hardware_watchpoints.ClearAll();
 
-            R_ABORT_UNLESS(svc::CloseHandle(m_debug_handle));
+            if (m_debug_handle != dmnt::cheat::impl::GetSharedDebugHandle()) {
+                R_ABORT_UNLESS(svc::CloseHandle(m_debug_handle));
+            }
             m_debug_handle = svc::InvalidHandle;
         }
 

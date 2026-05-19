@@ -3,7 +3,7 @@
 	"title_id":	"0x010000000000D609",
 	"title_id_range_min":	"0x010000000000D609",
 	"title_id_range_max":	"0x010000000000D609",
-	"main_thread_stack_size":	"0x00002000",
+	"main_thread_stack_size":	"0x00004000",
 	"main_thread_priority":	39,
 	"default_cpu_id":	3,
 	"process_category":	0,
@@ -15,8 +15,11 @@
 	"filesystem_access":	{
 		"permissions":	"0xFFFFFFFFFFFFFFFF"
 	},
-	"service_access":	["pm:dmnt", "ldr:dmnt", "ro:dmnt", "ns:dev", "lr", "fsp-srv", "fatal:u", "pgl", "htcs", "bsd:s", "set:sys","dmnt:cht"],
-	"service_host":	[],
+	"service_access":	["pm:dmnt", "pm:info", "ldr:dmnt", "ro:dmnt", "ns:dev", "lr", "fsp-srv", "fatal:u", "pgl", "htcs", "bsd:s", "set:sys", "set", "hid", "dmnt:cht"],
+	"service_host":	[
+		"dmnt:-",
+		"dmnt:cht"
+	],
 	"kernel_capabilities":	[{
 			"type":	"kernel_flags",
 			"value":	{
