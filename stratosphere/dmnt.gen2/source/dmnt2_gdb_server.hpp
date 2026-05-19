@@ -20,4 +20,5 @@ namespace ams::dmnt {
 
     void InitializeGdbServer();
     void InitializeGdbServer2();
+    os::NativeHandle GetGdbDebugHandle();
 }

@@ -55,6 +55,8 @@ namespace ams::dmnt {
             void Gen2Attach();
             m_from_stack_t get_from_stack(svc::ThreadContext &thread_context, bool get_address);
             void set_next_watch_for_exclusive_search();
+            bool HasDebugProcess() const { return m_debug_process.IsValid(); }
+            os::NativeHandle GetDebugHandle() const { return m_debug_process.GetHandle(); }
 
            private:
             void ProcessPacket(char *receive, char *reply);
@@ -62,7 +64,6 @@ namespace ams::dmnt {
             void SendPacket(bool *out_break, const char *src) { return m_packet_io.SendPacket(out_break, src, std::addressof(m_session)); }
             char *ReceivePacket(bool *out_break, char *dst, size_t size) { return m_packet_io.ReceivePacket(out_break, dst, size, std::addressof(m_session)); }
         private:
-            bool HasDebugProcess() const { return m_debug_process.IsValid(); }
             bool Is64Bit() const { return m_debug_process.Is64Bit(); }
             bool Is64BitAddressSpace() const { return m_debug_process.Is64BitAddressSpace(); }
         private:

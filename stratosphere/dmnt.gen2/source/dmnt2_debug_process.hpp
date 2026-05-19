@@ -182,6 +182,7 @@ namespace ams::dmnt {
             void GetThreadName(char *dst, u64 thread_id) const;
         private:
             Result Start();
+            Result StartShared(os::ProcessId process_id);
 
             void CollectProcessInfo();
 

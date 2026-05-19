@@ -134,4 +134,15 @@ namespace ams::dmnt {
         R_ABORT_UNLESS(os::CreateThread(std::addressof(g_server_thread2), GdbServerThreadFunction2, nullptr, g_server_thread_stack2, sizeof(g_server_thread_stack2), os::HighestThreadPriority - 1));
         os::StartThread(std::addressof(g_server_thread2));
     }
+
+    os::NativeHandle GetGdbDebugHandle() {
+        std::scoped_lock lk(g_gdb_server_lock);
+        if (g_gdb_server_constructed.load(std::memory_order_acquire)) {
+            auto &server = util::GetReference(g_gdb_server);
+            if (server.HasDebugProcess()) {
+                return server.GetDebugHandle();
+            }
+        }
+        return os::InvalidNativeHandle;
+    }
 }

@@ -16,6 +16,7 @@
 #include <stratosphere.hpp>
 #include "dmnt2_debug_log.hpp"
 #include "dmnt2_debug_process.hpp"
+#include "dmnt2_shared_debug_handle.hpp"
 #include "cheat/impl/dmnt_cheat_api.hpp"
 
 namespace ams::dmnt {
@@ -29,12 +30,12 @@ namespace ams::dmnt {
     }
 
     Result DebugProcess::Attach(os::ProcessId process_id, bool start_process) {
-        /* Attach to the process. */
-        if (dmnt::cheat::impl::GetSharedDebugHandle() != os::InvalidNativeHandle) {
-            m_debug_handle = dmnt::cheat::impl::GetSharedDebugHandle();
-        } else {
-            R_TRY(svc::DebugActiveProcess(std::addressof(m_debug_handle), process_id.value));
-        }
+        /* Determine if it's already attached (shared). */
+        const bool shared = (dmnt::dbg::GetSharedDebugHandle() != os::InvalidNativeHandle);
+
+        /* Attach Gen2. */
+        R_TRY(dmnt::dbg::AttachGen2(process_id));
+        m_debug_handle = dmnt::dbg::GetSharedDebugHandle();
 
         /* If necessary, start the process. */
         if (start_process) {
@@ -42,7 +43,11 @@ namespace ams::dmnt {
         }
 
         /* Collect initial information. */
-        R_TRY(this->Start());
+        if (shared) {
+            R_TRY(this->StartShared(process_id));
+        } else {
+            R_TRY(this->Start());
+        }
 
         /* Get the attached modules. */
         R_TRY(this->CollectModules());
@@ -65,13 +70,15 @@ namespace ams::dmnt {
             m_hardware_breakpoints.ClearAll();
             m_hardware_watchpoints.ClearAll();
 
-            if (m_debug_handle != dmnt::cheat::impl::GetSharedDebugHandle()) {
-                R_ABORT_UNLESS(svc::CloseHandle(m_debug_handle));
-            }
+            dmnt::dbg::DetachGen2();
             m_debug_handle = svc::InvalidHandle;
         }
 
         m_is_valid = false;
+        m_thread_count = 0;
+        std::memset(m_thread_valid, 0, sizeof(m_thread_valid));
+        std::memset(m_thread_ids, 0, sizeof(m_thread_ids));
+        std::memset(m_thread_infos, 0, sizeof(m_thread_infos));
     }
 
     Result DebugProcess::Start() {
@@ -127,6 +134,67 @@ namespace ams::dmnt {
                     break;
                 default:
                     break;
+            }
+        }
+
+        /* Set ourselves as valid. */
+        m_is_valid = true;
+        this->SetDebugBreaked();
+
+        R_SUCCEED();
+    }
+
+    Result DebugProcess::StartShared(os::ProcessId process_id) {
+        m_process_id = process_id;
+
+        /* Query memory extents to infer address space flags. */
+        this->CollectProcessInfo();
+
+        const bool is_64_bit = (m_process_aslr_size > 0xFFFFFFFFULL) || (m_process_alias_size > 0xFFFFFFFFULL);
+        if (is_64_bit) {
+            m_create_process_info.flags = svc::CreateProcessFlag_Is64Bit | svc::CreateProcessFlag_AddressSpace64Bit;
+        } else {
+            m_create_process_info.flags = svc::CreateProcessFlag_AddressSpace32Bit;
+        }
+
+        m_is_64_bit               = (m_create_process_info.flags & svc::CreateProcessFlag_Is64Bit);
+        m_is_64_bit_address_space = (m_create_process_info.flags & svc::CreateProcessFlag_AddressSpaceMask) == svc::CreateProcessFlag_AddressSpace64Bit;
+
+        /* Populate process info. */
+        m_create_process_info.process_id = process_id.value;
+
+        /* Get program id from info. */
+        R_TRY(svc::GetInfo(std::addressof(m_create_process_info.program_id), svc::InfoType_ProgramId, m_debug_handle, 0));
+
+        /* Copy default process name. */
+        std::strncpy(m_create_process_info.name, "Application", sizeof(m_create_process_info.name));
+        m_create_process_info.name[sizeof(m_create_process_info.name) - 1] = '\0';
+
+        /* Retrieve active thread list from the OS using GetThreadList. */
+        s32 num_threads = 0;
+        u64 thread_ids[ThreadCountMax];
+        R_TRY(svc::GetThreadList(std::addressof(num_threads), thread_ids, ThreadCountMax, m_debug_handle));
+
+        /* Initialize m_thread_valid and thread info for each active thread. */
+        for (s32 i = 0; i < num_threads; ++i) {
+            const u64 thread_id = thread_ids[i];
+            const s32 index = this->ThreadCreate(thread_id);
+            if (index >= 0) {
+                /* Get thread context to retrieve TPIDR (TLS pointer). */
+                svc::ThreadContext ctx = {};
+                u32 flags = svc::ThreadContextFlag_General | svc::ThreadContextFlag_Control;
+
+                svc::DebugInfoCreateThread create_thread = {};
+                create_thread.thread_id = thread_id;
+
+                if (R_SUCCEEDED(svc::GetDebugThreadContext(std::addressof(ctx), m_debug_handle, thread_id, flags))) {
+                    create_thread.tls_address = ctx.tpidr;
+                }
+
+                const Result result = osdbg::InitializeThreadInfo(std::addressof(m_thread_infos[index]), m_debug_handle, std::addressof(m_create_process_info), std::addressof(create_thread));
+                if (R_FAILED(result)) {
+                    AMS_DMNT2_GDB_LOG_WARN("DebugProcess::StartShared: InitializeThreadInfo(%lx) failed: %08x\n", thread_id, result.GetValue());
+                }
             }
         }
 

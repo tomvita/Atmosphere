@@ -27,7 +27,6 @@ namespace ams::dmnt {
             m_watch_data.gen2loop_on = m_session.IsValid() | gen2_server_on;
             if (m_watch_data.execute) {
                 m_watch_data.execute = false;
-                m_watch_data.done = true;
                 // flash_led_connect();
                 switch (m_watch_data.command) {
                     case SETW:
@@ -109,6 +108,8 @@ namespace ams::dmnt {
                         m_watch_data.next_pc++;
                         break;
                 };
+                m_watch_data.attached = this->HasDebugProcess();
+                m_watch_data.done = true;
             };
             return m_watch_data.gen2loop_on;
         }
@@ -2563,12 +2564,19 @@ namespace ams::dmnt {
         } else if (ParsePrefix(command, "attach")) {
             if (!this->HasDebugProcess()) {
                 /* Get the process id. */
-                int rc;
-                if (R_FAILED(rc = pmdmntInitialize())) {
-                    AppendReplyFormat(reply_cur, reply_end, "pmdmntInitialize rc=%x\n", rc);
-                };
-                pmdmntGetApplicationProcessId(&(m_watch_data.next_pid));
-                pmdmntExit();
+                if (dmnt::cheat::impl::GetHasActiveCheatProcess()) {
+                    dmnt::cheat::CheatProcessMetadata metadata = {};
+                    if (R_SUCCEEDED(dmnt::cheat::impl::GetCheatProcessMetadata(std::addressof(metadata)))) {
+                        m_watch_data.next_pid = metadata.process_id.value;
+                    }
+                } else {
+                    int rc;
+                    if (R_FAILED(rc = pmdmntInitialize())) {
+                        AppendReplyFormat(reply_cur, reply_end, "pmdmntInitialize rc=%x\n", rc);
+                    };
+                    pmdmntGetApplicationProcessId(&(m_watch_data.next_pid));
+                    pmdmntExit();
+                }
 
                 /* Set our process id. */
                 m_process_id = {m_watch_data.next_pid};
@@ -2584,6 +2592,8 @@ namespace ams::dmnt {
                     m_watch_data.attach_success = false;
                     AppendReplyFormat(reply_cur, reply_end, "Not able to attached to Game pid=%ld, maybe need to detach from dmnt, use command gen2\n", m_watch_data.next_pid);
                 }
+            } else {
+                AppendReplyFormat(reply_cur, reply_end, "Attached to Game pid=%ld\n", m_process_id.value);
             }
         } else if (ParsePrefix(command, "cont")) {
             /* Get thread id. */

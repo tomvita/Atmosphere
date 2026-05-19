@@ -18,6 +18,8 @@
 #include "dmnt_cheat_vm.hpp"
 #include "dmnt_cheat_debug_events_manager.hpp"
 #include "../../dmnt2_debug_log.hpp"
+#include "../../dmnt2_gdb_server.hpp"
+#include "../../dmnt2_shared_debug_handle.hpp"
 
 namespace ams::dmnt::cheat::impl {
 
@@ -191,7 +193,7 @@ namespace ams::dmnt::cheat::impl {
                         }
 
                         /* Close resources. */
-                        R_ABORT_UNLESS(svc::CloseHandle(m_cheat_process_debug_handle));
+                        dmnt::dbg::DetachDmnt();
                         m_cheat_process_debug_handle = os::InvalidNativeHandle;
 
                         /* Save cheat toggles. */
@@ -935,11 +937,10 @@ namespace ams::dmnt::cheat::impl {
             }
 
             /* Open a debug handle. */
-            svc::Handle debug_handle = svc::InvalidHandle;
-            R_ABORT_UNLESS_IF_NEW_PROCESS(svc::DebugActiveProcess(std::addressof(debug_handle), m_cheat_process_metadata.process_id.value));
+            R_ABORT_UNLESS_IF_NEW_PROCESS(dmnt::dbg::AttachDmnt(m_cheat_process_metadata.process_id));
 
             /* Set our debug handle. */
-            m_cheat_process_debug_handle = debug_handle;
+            m_cheat_process_debug_handle = dmnt::dbg::GetSharedDebugHandle();
 
             /* Cancel process guard. */
             proc_guard.Cancel();
