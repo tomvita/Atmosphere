@@ -165,7 +165,7 @@ namespace ams::dmnt {
 
 namespace ams::dmnt {
 
-    #define AMS_DMNT2_ENABLE_SD_CARD_DEBUG_LOG
+    //#define AMS_DMNT2_ENABLE_SD_CARD_DEBUG_LOG
 
     #if defined(AMS_DMNT2_ENABLE_SD_CARD_DEBUG_LOG)
 
