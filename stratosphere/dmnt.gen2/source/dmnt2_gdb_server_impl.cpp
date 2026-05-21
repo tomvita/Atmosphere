@@ -14,7 +14,9 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <stratosphere.hpp>
+#if !defined(DMNT_GEN2_NO_CHEATVM)
 #include "cheat/impl/dmnt_cheat_api.hpp"
+#endif
 #include "dmnt2_debug_log.hpp"
 #include "dmnt2_gdb_server_impl.hpp"
 
@@ -51,47 +53,34 @@ namespace ams::dmnt {
                         clearw();
                         break;
                     case DETACH:
-                        m_watch_data.address = 0;
+                        clearw();
                         m_debug_process.Detach();
+#if !defined(DMNT_GEN2_NO_CHEATVM)
                         dmnt::cheat::impl::SuspendDebugEvents(false);
+#endif
+                        m_watch_data.attach_success = false;
                         break;
                     case ATTACH:
-                        if (!this->HasDebugProcess()) {
-                            /* Get the process id. */
-
-                            /* Set our process id. */
-                            m_process_id = {m_watch_data.next_pid};
-
-                            /* Wait for us to be attached. */
-                            Gen2Attach();
-
-
-                            /* If we're attached, send a stop reply packet. */
-                            if (m_debug_process.IsValid()) {
-                                m_watch_data.attach_success = true;
-                            } else {
-                                m_watch_data.attach_success = false;
-                            }
+                        if (this->HasDebugProcess() && m_process_id != os::ProcessId{m_watch_data.next_pid}) {
+                            clearw();
+                            m_debug_process.Detach();
                         }
+                        if (!this->HasDebugProcess()) {
+                            Gen2Attach();
+                        }
+                        m_watch_data.attach_success = m_debug_process.IsValid() && m_process_id == os::ProcessId{m_watch_data.next_pid};
                         break;
                     case ATTACH_CONT:
+                        if (this->HasDebugProcess() && m_process_id != os::ProcessId{m_watch_data.next_pid}) {
+                            clearw();
+                            m_debug_process.Detach();
+                        }
                         if (!this->HasDebugProcess()) {
-                            /* Get the process id. */
-
-                            /* Set our process id. */
-                            m_process_id = {m_watch_data.next_pid};
-
-                            /* Wait for us to be attached. */
                             Gen2Attach();
-
+                        }
+                        m_watch_data.attach_success = m_debug_process.IsValid() && m_process_id == os::ProcessId{m_watch_data.next_pid};
+                        if (m_watch_data.attach_success) {
                             m_debug_process.Continue();
-
-                            /* If we're attached, send a stop reply packet. */
-                            if (m_debug_process.IsValid()) {
-                                m_watch_data.attach_success = true;
-                            } else {
-                                m_watch_data.attach_success = false;
-                            }
                         }
                         break;
                     case CONT:
@@ -964,7 +953,9 @@ namespace ams::dmnt {
 
     }
     void GdbServerImpl::Gen2Attach() {
+#if !defined(DMNT_GEN2_NO_CHEATVM)
         dmnt::cheat::impl::SuspendDebugEvents(true);
+#endif
         /* Set our process id. */
         m_process_id = {m_watch_data.next_pid};
 
@@ -989,7 +980,9 @@ namespace ams::dmnt {
     GdbServerImpl::~GdbServerImpl() {
         /* Set ourselves as killed. */
         m_killed = true;
+#if !defined(DMNT_GEN2_NO_CHEATVM)
         dmnt::cheat::impl::SuspendDebugEvents(false);
+#endif
 
         /* Signal to our events thread. */
         {
@@ -2404,11 +2397,22 @@ namespace ams::dmnt {
         char *reply_end = m_buffer + sizeof(m_buffer);
         m_watch_data.failed = 0;
         m_watch_data.next_pc = 0;
+        if (!m_debug_process.IsValid()) {
+            m_watch_data.failed = 1;
+            AppendReplyFormat(reply_cur, reply_end, "Unable to set watch, no debug process attached\n");
+            return;
+        }
         if ((m_watch_data.read || m_watch_data.write) && m_debug_process.IsValidWatchPoint(m_watch_data.address, m_watch_data.size)) {
             if (R_SUCCEEDED(m_debug_process.SetWatchPoint(m_watch_data.address, m_watch_data.size, m_watch_data.read, m_watch_data.write))) {
                 AppendReplyFormat(reply_cur, reply_end, "Watching 0x%010lx read=%d write=%d\n", m_watch_data.address, m_watch_data.read, m_watch_data.write);
                 m_watch_data.count = 0;
+                m_gen2_watch_active = true;
+                m_gen2_watch_address = m_watch_data.address;
+                m_gen2_watch_size = m_watch_data.size;
+                m_gen2_watch_read = m_watch_data.read;
+                m_gen2_watch_write = m_watch_data.write;
             } else {
+                m_watch_data.failed = 1;
                 AppendReplyFormat(reply_cur, reply_end, "Unable to set Watchpoint 0x%010lx read=%d write=%d\n", m_watch_data.address, m_watch_data.read, m_watch_data.write);
             }
         }
@@ -2416,28 +2420,53 @@ namespace ams::dmnt {
             if (R_SUCCEEDED(m_debug_process.SetHardwareBreakPoint(m_watch_data.address, m_watch_data.size, false))) {
                 AppendReplyFormat(reply_cur, reply_end, "Watching Register X%d at 0x%010lx \n", m_watch_data.i, m_watch_data.address);
                 m_watch_data.count = 0;
+                m_gen2_watch_active = true;
+                m_gen2_watch_address = m_watch_data.address;
+                m_gen2_watch_size = m_watch_data.size;
+                m_gen2_watch_read = false;
+                m_gen2_watch_write = false;
             } else {
+                m_watch_data.failed = 1;
                 AppendReplyFormat(reply_cur, reply_end, "Unable to set Breakpoint 0x%010lx \n", m_watch_data.address);
             }
+        } else if (!m_debug_process.IsValidWatchPoint(m_watch_data.address, m_watch_data.size)) {
+            m_watch_data.failed = 1;
+            AppendReplyFormat(reply_cur, reply_end, "Invalid Watchpoint 0x%010lx size=%d\n", m_watch_data.address, m_watch_data.size);
         }
     }
 
     void GdbServerImpl::clearw() {
         char *reply_cur = m_buffer;
         char *reply_end = m_buffer + sizeof(m_buffer);
-        if (m_watch_data.read || m_watch_data.write) {
-            if (R_SUCCEEDED(m_debug_process.ClearWatchPoint(m_watch_data.address, m_watch_data.size))) {
-                AppendReplyFormat(reply_cur, reply_end, "Clearing Watchpoint 0x%010lx \n", m_watch_data.address);
+        const bool has_debug_process = m_debug_process.IsValid();
+        if (has_debug_process && m_watch_data.next_pc != 0 && m_watch_data.next_pc != 0x55AA55AA) {
+            m_debug_process.ClearHardwareBreakPoint(m_watch_data.next_pc, sizeof(u32));
+            m_watch_data.next_pc = 0;
+        }
+        const u64 address = m_gen2_watch_active ? m_gen2_watch_address : m_watch_data.address;
+        const u64 size = m_gen2_watch_active ? m_gen2_watch_size : m_watch_data.size;
+        const bool read = m_gen2_watch_active ? m_gen2_watch_read : m_watch_data.read;
+        const bool write = m_gen2_watch_active ? m_gen2_watch_write : m_watch_data.write;
+
+        if (!has_debug_process || address == 0) {
+            m_gen2_watch_active = false;
+            m_watch_data.address = 0;
+            return;
+        }
+        if (read || write) {
+            if (R_SUCCEEDED(m_debug_process.ClearWatchPoint(address, size))) {
+                AppendReplyFormat(reply_cur, reply_end, "Clearing Watchpoint 0x%010lx \n", address);
             } else {
-                AppendReplyFormat(reply_cur, reply_end, "Unable to clear Watchpoint 0x%010lx \n", m_watch_data.address);
+                AppendReplyFormat(reply_cur, reply_end, "Unable to clear Watchpoint 0x%010lx \n", address);
             }
         } else {
-            if (R_SUCCEEDED(m_debug_process.ClearHardwareBreakPoint(m_watch_data.address, m_watch_data.size))) {
-                AppendReplyFormat(reply_cur, reply_end, "Clearing BreakPoint 0x%010lx \n", m_watch_data.address);
+            if (R_SUCCEEDED(m_debug_process.ClearHardwareBreakPoint(address, size))) {
+                AppendReplyFormat(reply_cur, reply_end, "Clearing BreakPoint 0x%010lx \n", address);
             } else {
-                AppendReplyFormat(reply_cur, reply_end, "Unable to clear BreakPoint 0x%010lx \n", m_watch_data.address);
+                AppendReplyFormat(reply_cur, reply_end, "Unable to clear BreakPoint 0x%010lx \n", address);
             }
         }
+        m_gen2_watch_active = false;
         m_watch_data.address = 0;
     }
 
@@ -2556,27 +2585,36 @@ namespace ams::dmnt {
             }
         } else if (ParsePrefix(command, "detach")) {
             m_debug_process.Detach();
+#if !defined(DMNT_GEN2_NO_CHEATVM)
             dmnt::cheat::impl::SuspendDebugEvents(false);
+#endif
+            m_watch_data.attach_success = false;
             AppendReplyFormat(reply_cur, reply_end, "Game detached\n");
         } else if (ParsePrefix(command, "gen2")) {
+#if !defined(DMNT_GEN2_NO_CHEATVM)
             dmnt::cheat::impl::SuspendDebugEvents(true);
+#endif
             AppendReplyFormat(reply_cur, reply_end, "Game ready for Gen2\n");
         } else if (ParsePrefix(command, "attach")) {
             if (!this->HasDebugProcess()) {
                 /* Get the process id. */
+#if !defined(DMNT_GEN2_NO_CHEATVM)
                 if (dmnt::cheat::impl::GetHasActiveCheatProcess()) {
                     dmnt::cheat::CheatProcessMetadata metadata = {};
                     if (R_SUCCEEDED(dmnt::cheat::impl::GetCheatProcessMetadata(std::addressof(metadata)))) {
                         m_watch_data.next_pid = metadata.process_id.value;
                     }
                 } else {
+#endif
                     int rc;
                     if (R_FAILED(rc = pmdmntInitialize())) {
                         AppendReplyFormat(reply_cur, reply_end, "pmdmntInitialize rc=%x\n", rc);
                     };
                     pmdmntGetApplicationProcessId(&(m_watch_data.next_pid));
                     pmdmntExit();
+#if !defined(DMNT_GEN2_NO_CHEATVM)
                 }
+#endif
 
                 /* Set our process id. */
                 m_process_id = {m_watch_data.next_pid};
@@ -2593,6 +2631,7 @@ namespace ams::dmnt {
                     AppendReplyFormat(reply_cur, reply_end, "Not able to attached to Game pid=%ld, maybe need to detach from dmnt, use command gen2\n", m_watch_data.next_pid);
                 }
             } else {
+                m_watch_data.attach_success = true;
                 AppendReplyFormat(reply_cur, reply_end, "Attached to Game pid=%ld\n", m_process_id.value);
             }
         } else if (ParsePrefix(command, "cont")) {

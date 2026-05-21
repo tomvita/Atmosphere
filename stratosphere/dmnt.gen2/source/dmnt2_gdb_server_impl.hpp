@@ -45,6 +45,11 @@ namespace ams::dmnt {
             os::ProcessId m_process_id{os::InvalidProcessId};
             os::Event m_event;
             os::ProcessId m_wait_process_id{os::InvalidProcessId};
+            bool m_gen2_watch_active{false};
+            u64 m_gen2_watch_address{0};
+            u64 m_gen2_watch_size{0};
+            bool m_gen2_watch_read{false};
+            bool m_gen2_watch_write{false};
         public:
             GdbServerImpl(int socket, void *thread_stack, size_t stack_size);
             ~GdbServerImpl();
