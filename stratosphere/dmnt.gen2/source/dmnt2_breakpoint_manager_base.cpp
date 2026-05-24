@@ -44,8 +44,12 @@ namespace ams::dmnt {
         BreakPointBase *bp = nullptr;
         for (size_t i = 0; (bp = static_cast<BreakPointBase *>(this->GetBreakPoint(i))) != nullptr; ++i) {
             if (bp->m_in_use && bp->m_address == address) {
-                // AMS_ABORT_UNLESS(bp->m_size == size);
-                if (bp->m_size == size){}
+                /* Historical note: this used to assert that bp->m_size == size,
+                 * but the fork commented out the AMS_ABORT_UNLESS and left a
+                 * dead `if (bp->m_size == size){}` placeholder. The size
+                 * argument is informational only - we identify a breakpoint
+                 * uniquely by its address. See design doc Bug 8. */
+                AMS_UNUSED(size);
                 R_RETURN(bp->Clear(m_debug_process));
             }
         }

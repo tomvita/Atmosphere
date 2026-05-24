@@ -64,11 +64,17 @@ namespace ams::dmnt {
 
         /* Validate. */
         if (size <= 8) {
-            /* Check that address is aligned. */
-            // if (util::AlignDown(address, 8) != util::AlignDown(address + size - 1, 8)) {
-            //     AMS_DMNT2_GDB_LOG_ERROR("HardwareWatchPointManager::IsValidWatchPoint(%lx, %lx) FAIL range crosses qword boundary\n", address, size);
-            //     return false;
-            // }
+            /* Check that address does not straddle a qword boundary.
+             * The DBGWCR `BAS` field is 8 bits within a single aligned
+             * qword; a watch that crosses the boundary would only fire
+             * for the lower half. The original Atmosphere check was
+             * disabled in the fork (see design doc Bug 13); we restore
+             * it here so callers get an explicit failure instead of a
+             * silently-half-armed watchpoint. */
+            if (util::AlignDown(address, 8) != util::AlignDown(address + size - 1, 8)) {
+                AMS_DMNT2_GDB_LOG_ERROR("HardwareWatchPointManager::IsValidWatchPoint(%lx, %lx) FAIL range crosses qword boundary\n", address, size);
+                return false;
+            }
         } else {
             /* Check size is small enough. */
             if (size > 0x80000000) {

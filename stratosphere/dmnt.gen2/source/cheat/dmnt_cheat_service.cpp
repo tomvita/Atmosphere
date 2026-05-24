@@ -21,6 +21,14 @@
 
 namespace ams::dmnt {
     extern m_watch_data_t m_watch_data;
+    /* Mutex protecting m_watch_data against the gen2_loop poll thread,
+     * the GDB events thread (capture-time updates), and the dmnt:cht
+     * IPC handlers below. See gen2fork_design_and_review.md Opt 3. */
+    extern os::SdkMutex g_watch_data_lock;
+    /* Signaled to wake gen2_loop's polling thread as soon as a client
+     * sets execute=true, so commands are processed sub-millisecond
+     * instead of waiting for the next 50 ms tick. See Opt 1. */
+    extern os::Event g_gen2_request_event;
 }
 
 namespace ams::dmnt::cheat {
@@ -201,14 +209,29 @@ namespace ams::dmnt::cheat {
     Result CheatService::GetGen2WatchData(const sf::OutBuffer &buffer) {
         R_UNLESS(buffer.GetPointer() != nullptr, dmnt::cheat::ResultCheatNullBuffer());
         const size_t copy_size = std::min(sizeof(ams::dmnt::m_watch_data), buffer.GetSize());
-        std::memcpy(buffer.GetPointer(), std::addressof(ams::dmnt::m_watch_data), copy_size);
+        {
+            std::scoped_lock lk(ams::dmnt::g_watch_data_lock);
+            std::memcpy(buffer.GetPointer(), std::addressof(ams::dmnt::m_watch_data), copy_size);
+        }
         R_SUCCEED();
     }
 
     Result CheatService::SetGen2WatchData(const sf::InBuffer &buffer) {
         R_UNLESS(buffer.GetPointer() != nullptr, dmnt::cheat::ResultCheatNullBuffer());
         const size_t copy_size = std::min(sizeof(ams::dmnt::m_watch_data), buffer.GetSize());
-        std::memcpy(std::addressof(ams::dmnt::m_watch_data), buffer.GetPointer(), copy_size);
+        bool wake_loop;
+        {
+            std::scoped_lock lk(ams::dmnt::g_watch_data_lock);
+            std::memcpy(std::addressof(ams::dmnt::m_watch_data), buffer.GetPointer(), copy_size);
+            /* Wake the gen2_loop polling thread immediately if the client
+             * is requesting an action. This is the Opt 1 latency fix:
+             * sub-millisecond command dispatch instead of waiting up to
+             * 50 ms for the next periodic tick. */
+            wake_loop = ams::dmnt::m_watch_data.execute;
+        }
+        if (wake_loop) {
+            ams::dmnt::g_gen2_request_event.Signal();
+        }
         R_SUCCEED();
     }
 

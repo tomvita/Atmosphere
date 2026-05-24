@@ -23,84 +23,149 @@
 namespace ams::dmnt {
 
         m_watch_data_t m_watch_data;
+        /* Protects m_watch_data and the capture-time fields of fromU/count/
+         * total_trigger/next_pc/failed against the three concurrent writers:
+         *   - cheat:cht IPC handlers Get/SetGen2WatchData (Breeze, bookmark.ovl)
+         *   - the gen2_loop() polling thread (GdbServerThreadFunction2)
+         *   - ProcessDebugEvents (capture path)
+         * Pre-mutex, two of these regularly raced; see design doc Bug 3 / Opt 3.
+         */
+        constinit os::SdkMutex g_watch_data_lock;
+
+        /* Signaled by SetGen2WatchData when execute==true. The gen2_loop
+         * polling thread waits on this event with a long timeout (so it
+         * still periodically refreshes the `attached / gen2loop_on` mirror
+         * fields) instead of busy-polling every 50 ms. See design doc Opt 1.
+         */
+        os::Event g_gen2_request_event(os::EventClearMode_AutoClear);
+
+        /* 0 = idle, 1 = IPC client connected, 2 = raw mode (no GDB session
+         * but an external client may be talking via dmnt:cht IPC). This
+         * used to be a member of GdbServerImpl, but it needs to outlive
+         * sessions so external clients can detect us at any time.
+         * See design doc Bug 5 / Opt 2.
+         */
+        constinit u8 g_gen2_server_on = 0;
 // #include "led.hpp"
         bool GdbServerImpl::gen2_loop() {
-            m_watch_data.attached = this->HasDebugProcess();
-            m_watch_data.gen2loop_on = m_session.IsValid() | gen2_server_on;
-            if (m_watch_data.execute) {
+            /* Note: we acquire+release the watch_data lock around each
+             * field group so that long-blocking operations (Gen2Attach
+             * waits on a 2s condvar timeout, Detach calls into the
+             * cheat-VM) do not starve concurrent IPC clients or the
+             * capture-side ProcessDebugEvents writer. */
+            {
+                std::scoped_lock lk(g_watch_data_lock);
+                m_watch_data.attached = this->HasDebugProcess();
+                /* gen2loop_on:
+                 *   1 = a GDB session is alive
+                 *   2 = raw mode (no GDB session, but accept thread is waiting)
+                 *   0 = idle
+                 * `gen2_server_on` (the GdbServerImpl member) is kept for ABI
+                 * compatibility with older clients but is no longer the source
+                 * of truth - the free-standing g_gen2_server_on is. */
+                m_watch_data.gen2loop_on = m_session.IsValid() ? 1 : g_gen2_server_on;
+                if (!m_watch_data.execute) {
+                    return m_watch_data.gen2loop_on;
+                }
                 m_watch_data.execute = false;
-                // flash_led_connect();
-                switch (m_watch_data.command) {
-                    case SETW:
-                        if (m_watch_data.x30_catch_type == EXCLUSIVE_SEARCH) {
-                            if (!m_watch_data.next_read && !m_watch_data.next_write) break;  // not memeory access catched, not valid data for exclusive search
+            }
 
-                            m_watch_data.target_address = m_watch_data.next_address;
-                            m_watch_data.exclusive_search_count = m_watch_data.count;
-                            if ((m_watch_data.read || m_watch_data.write) || (m_watch_data.stack_check_count > 0) || m_watch_data.grab_A || m_watch_data.grab_R) m_watch_data.exclusive_search_from2 = true; else m_watch_data.exclusive_search_from2 = false;
-                            m_watch_data.exclusive_search_target_trigger = 0;
-                            set_next_watch_for_exclusive_search();
-                        } else {
-                            m_watch_data.total_trigger = 0;
-                            clearw();
-                            m_watch_data.address = m_watch_data.next_address;
-                            m_watch_data.read = m_watch_data.next_read;
-                            m_watch_data.write = m_watch_data.next_write;
-                            setw();
-                        }
-                        break;
-                    case CLEARW:
+            /* Dispatch outside the lock for commands that may block
+             * (ATTACH variants call Gen2Attach which waits up to 2s).
+             * The dispatched helpers (setw/clearw/Gen2Attach) take the
+             * lock themselves where they touch shared fields. */
+            switch (m_watch_data.command) {
+                case SETW:
+                    if (m_watch_data.x30_catch_type == EXCLUSIVE_SEARCH) {
+                        std::scoped_lock lk(g_watch_data_lock);
+                        if (!m_watch_data.next_read && !m_watch_data.next_write) break;  // not memeory access catched, not valid data for exclusive search
+
+                        m_watch_data.target_address = m_watch_data.next_address;
+                        m_watch_data.exclusive_search_count = m_watch_data.count;
+                        if ((m_watch_data.read || m_watch_data.write) || (m_watch_data.stack_check_count > 0) || m_watch_data.grab_A || m_watch_data.grab_R) m_watch_data.exclusive_search_from2 = true; else m_watch_data.exclusive_search_from2 = false;
+                        m_watch_data.exclusive_search_target_trigger = 0;
+                        set_next_watch_for_exclusive_search();
+                    } else {
+                        std::scoped_lock lk(g_watch_data_lock);
+                        m_watch_data.total_trigger = 0;
                         clearw();
-                        break;
-                    case DETACH:
-                        clearw();
-                        m_debug_process.Detach();
+                        m_watch_data.address = m_watch_data.next_address;
+                        m_watch_data.read = m_watch_data.next_read;
+                        m_watch_data.write = m_watch_data.next_write;
+                        setw();
+                    }
+                    break;
+                case CLEARW: {
+                    std::scoped_lock lk(g_watch_data_lock);
+                    clearw();
+                    break;
+                }
+                case DETACH: {
+                    std::scoped_lock lk(g_watch_data_lock);
+                    clearw();
+                    m_debug_process.Detach();
 #if !defined(DMNT_GEN2_NO_CHEATVM)
-                        dmnt::cheat::impl::SuspendDebugEvents(false);
+                    dmnt::cheat::impl::SuspendDebugEvents(false);
 #endif
-                        m_watch_data.attach_success = false;
-                        break;
-                    case ATTACH:
+                    m_watch_data.attach_success = false;
+                    break;
+                }
+                case ATTACH:
+                    /* The HasDebugProcess() check + Detach is short
+                     * enough to keep under one lock acquisition, but
+                     * Gen2Attach itself MUST run unlocked - it waits
+                     * on g_event_done_cv for up to 2 seconds. */
+                    {
+                        std::scoped_lock lk(g_watch_data_lock);
                         if (this->HasDebugProcess() && m_process_id != os::ProcessId{m_watch_data.next_pid}) {
                             clearw();
                             m_debug_process.Detach();
                         }
-                        if (!this->HasDebugProcess()) {
-                            Gen2Attach();
-                        }
+                    }
+                    if (!this->HasDebugProcess()) {
+                        Gen2Attach();
+                    }
+                    {
+                        std::scoped_lock lk(g_watch_data_lock);
                         m_watch_data.attach_success = m_debug_process.IsValid() && m_process_id == os::ProcessId{m_watch_data.next_pid};
-                        break;
-                    case ATTACH_CONT:
+                    }
+                    break;
+                case ATTACH_CONT:
+                    {
+                        std::scoped_lock lk(g_watch_data_lock);
                         if (this->HasDebugProcess() && m_process_id != os::ProcessId{m_watch_data.next_pid}) {
                             clearw();
                             m_debug_process.Detach();
                         }
-                        if (!this->HasDebugProcess()) {
-                            Gen2Attach();
-                        }
+                    }
+                    if (!this->HasDebugProcess()) {
+                        Gen2Attach();
+                    }
+                    {
+                        std::scoped_lock lk(g_watch_data_lock);
                         m_watch_data.attach_success = m_debug_process.IsValid() && m_process_id == os::ProcessId{m_watch_data.next_pid};
                         if (m_watch_data.attach_success) {
                             m_debug_process.Continue();
                         }
-                        break;
-                    case CONT:
-                        if (this->HasDebugProcess()) {
-                            // DebugProcess::Start();
-                            m_debug_process.Continue();
-                            // c();
-                            // R_ABORT_UNLESS(pm::dmnt::StartProcess(m_process_id));
-                            // vCont();
-                            // svcContinueDebugEvent(m_process_id.value, 7, NULL, 0u);
-                        }
-                        break;
-                    case INCPC:
-                        m_watch_data.next_pc++;
-                        break;
-                };
+                    }
+                    break;
+                case CONT:
+                    if (this->HasDebugProcess()) {
+                        m_debug_process.Continue();
+                    }
+                    break;
+                case INCPC: {
+                    std::scoped_lock lk(g_watch_data_lock);
+                    m_watch_data.next_pc++;
+                    break;
+                }
+            };
+            {
+                std::scoped_lock lk(g_watch_data_lock);
                 m_watch_data.attached = this->HasDebugProcess();
                 m_watch_data.done = true;
-            };
-            return m_watch_data.gen2loop_on;
+                return m_watch_data.gen2loop_on;
+            }
         }
     namespace {
         constexpr const u32 SdkBreakPoint     = 0xE7FFFFFF;
@@ -951,6 +1016,36 @@ namespace ams::dmnt {
         constinit os::SdkConditionVariable g_event_request_cv;
         constinit os::SdkConditionVariable g_event_done_cv;
 
+        /* Predicate flags for the Gen2Attach <-> DebugEventsThread
+         * condvar handshake. These exist because the original
+         * handshake had a real lost-signal race:
+         *
+         *   - DebugEventsThread waits on g_event_request_cv with
+         *     g_event_lock held.
+         *   - Gen2Attach signaled g_event_request_cv while holding a
+         *     DIFFERENT mutex (g_event_request_lock).
+         *
+         * Because the two sides used different mutexes there was no
+         * synchronization between "is the waiter ready to receive"
+         * and "the signal happens", so the signal could be dropped if
+         * Gen2Attach ran before the waiter reached Wait(). The
+         * symptom is "ATTACH from Breeze times out and stays broken
+         * until something (IDA GDB connect, sleep/wake) happens that
+         * causes a fresh DebugEventsThread to enter Wait() between
+         * the next Gen2Attach calls".
+         *
+         * The fix is the standard condvar pattern: same mutex on
+         * both sides, predicate flag, while-loop on the predicate.
+         *
+         * Set by Gen2Attach when posting an attach request, cleared
+         * by DebugEventsThread when it picks the request up.
+         */
+        constinit bool g_attach_request_pending = false;
+        /* Set by DebugEventsThread when it has finished an attach
+         * (success or failure); cleared by Gen2Attach after it
+         * observes done. */
+        constinit bool g_attach_done = false;
+
     }
     void GdbServerImpl::Gen2Attach() {
 #if !defined(DMNT_GEN2_NO_CHEATVM)
@@ -959,14 +1054,33 @@ namespace ams::dmnt {
         /* Set our process id. */
         m_process_id = {m_watch_data.next_pid};
 
-        /* Wait for us to be attached. */
-        {
-            std::scoped_lock lk(g_event_request_lock);
-            g_event_request_cv.Signal();
-            if (!g_event_done_cv.TimedWait(g_event_request_lock, TimeSpan::FromSeconds(2))) {
-                m_event.Signal();
+        /* Post the attach request under the same mutex the
+         * DebugEventsThread waits on, with a predicate flag so a
+         * signal cannot be lost even if the waiter isn't blocked yet.
+         * See g_attach_request_pending comment above. */
+        std::scoped_lock lk(g_event_lock);
+        g_attach_done            = false;
+        g_attach_request_pending = true;
+        g_event_request_cv.Signal();
+
+        /* Wait for the worker to report done (success or failure).
+         * Loop because condvars can spuriously wake. Total budget
+         * 2 s, matching the original timeout. */
+        const auto start = os::GetSystemTick();
+        const auto budget = TimeSpan::FromSeconds(2);
+        while (!g_attach_done) {
+            const auto elapsed = os::ConvertToTimeSpan(os::GetSystemTick() - start);
+            if (elapsed >= budget) {
+                break;
             }
+            const auto remaining = budget - elapsed;
+            /* TimedWait atomically releases g_event_lock; on return
+             * we hold it again. */
+            (void)g_event_done_cv.TimedWait(g_event_lock, remaining);
         }
+        /* Reset pending in case the worker hasn't picked it up
+         * (e.g. on timeout) so a future request isn't double-consumed. */
+        g_attach_request_pending = false;
     }
     GdbServerImpl::GdbServerImpl(int socket, void *stack, size_t stack_size) : m_socket(socket), m_session(socket), m_packet_io(), m_state(State::Initial), m_debug_process(), m_event(os::EventClearMode_AutoClear) {
         /* Create and start the events thread. */
@@ -984,9 +1098,13 @@ namespace ams::dmnt {
         dmnt::cheat::impl::SuspendDebugEvents(false);
 #endif
 
-        /* Signal to our events thread. */
+        /* Wake the events thread so it observes m_killed and exits
+         * its predicate-loop. Must signal under g_event_lock (the
+         * same mutex the waiter uses) - the old code signaled under
+         * g_event_request_lock which had no relationship to the
+         * waiter and was a race. */
         {
-            std::scoped_lock lk(g_event_request_lock);
+            std::scoped_lock lk(g_event_lock);
             g_event_request_cv.Signal();
         }
 
@@ -1013,13 +1131,22 @@ namespace ams::dmnt {
 
             /* Loop while we're not killed. */
             while (!m_killed) {
-                /* Wait for a request to come in. */
-                g_event_request_cv.Wait(g_event_lock);
+                /* Wait for an attach request to come in. Predicate
+                 * loop so a signal that arrived before we reached
+                 * Wait() is still observed (Gen2Attach sets
+                 * g_attach_request_pending under the same lock before
+                 * signaling). See g_attach_request_pending comment. */
+                while (!m_killed && !g_attach_request_pending) {
+                    g_event_request_cv.Wait(g_event_lock);
+                }
 
                 /* Check that we're not killed now. */
                 if (m_killed) {
                     break;
                 }
+
+                /* Consume the request. */
+                g_attach_request_pending = false;
 
                 /* Detach. */
                 m_debug_process.Detach();
@@ -1033,6 +1160,9 @@ namespace ams::dmnt {
                     /* If we have a process id, attach. */
                     if (R_FAILED(m_debug_process.Attach(m_process_id, m_process_id == m_wait_process_id))) {
                         AMS_DMNT2_GDB_LOG_DEBUG("Failed to attach to %016lx\n", m_process_id.value);
+                        /* Report done (failed) and loop back to wait
+                         * for the next request. */
+                        g_attach_done = true;
                         g_event_done_cv.Signal();
                         continue;
                     }
@@ -1041,7 +1171,50 @@ namespace ams::dmnt {
                 /* Set our process id. */
                 m_process_id = m_debug_process.GetProcessId();
 
+                /* Default m_watch_data.main_start/main_end to the
+                 * attached process's main NSO .text range.
+                 *
+                 * gen2's capture-side maths (return-address scanning
+                 * in get_from_stack, x30/lr offset encoding in
+                 * ProcessDebugEvents) requires these be set; if a
+                 * client forgets, capture produces garbage addresses
+                 * that the client then dereferences, often crashing
+                 * the debugged process or the client itself. Breeze
+                 * sets them in its gen2_menu execute path; for a
+                 * while bookmark.ovl did not, which is what triggered
+                 * gen2fork_design_and_review.md addendum 11.
+                 *
+                 * We default here unconditionally on every fresh
+                 * attach because:
+                 *  - The previous attach's main_start is stale for a
+                 *    new process; carrying it over is always wrong.
+                 *  - gen2_loop's ATTACH path no-ops if HasDebugProcess
+                 *    matches the requested pid, so this code only
+                 *    runs on a real (re)attach to a different
+                 *    process.
+                 *  - Clients that want a custom value (e.g. Breeze
+                 *    using m_mainBaseAddr + m_R1 for an offset into
+                 *    the code region) override these fields on each
+                 *    subsequent SETW, after attach completes.
+                 *
+                 * CollectModules() ran inside m_debug_process.Attach()
+                 * above, so module 0 is the main NSO's first
+                 * ReadExecute region (matches Breeze's
+                 * dmntchtQueryCheatProcessMemory(main_base) result).
+                 */
+                if (m_debug_process.GetModuleCount() > 0) {
+                    std::scoped_lock wd_lk(g_watch_data_lock);
+                    const size_t main_ix    = m_debug_process.GetMainModuleIndex();
+                    const u64    main_base  = m_debug_process.GetModuleBaseAddress(main_ix);
+                    const u64    main_size  = m_debug_process.GetModuleSize(main_ix);
+                    m_watch_data.main_start = main_base;
+                    m_watch_data.main_end   = main_base + main_size;
+                    AMS_DMNT2_GDB_LOG_DEBUG("Defaulted main_start=%lx main_end=%lx\n",
+                                            m_watch_data.main_start, m_watch_data.main_end);
+                }
+
                 /* Signal that we're done attaching. */
+                g_attach_done = true;
                 g_event_done_cv.Signal();
 
                 /* Process debug events without the lock held. */
@@ -1098,18 +1271,59 @@ namespace ams::dmnt {
         if (m_watch_data.stack_check_count > 0) {
             svc::MemoryInfo meminfo;
             int check_size = stack_check_size;
-            if R_FAILED (m_debug_process.ReadMemory(buffer, thread_context.sp, stack_check_size * sizeof(u64))) {
-                if R_SUCCEEDED (m_debug_process.QueryMemory(&meminfo, thread_context.sp))
+
+            /* Opt 4: read only as much stack as we plausibly need. Each
+             * matched return address typically lives within the first
+             * few qwords of a call frame, so 4 qwords per requested
+             * stack_check_count is a sensible upper bound. Capped to
+             * `stack_check_size` (100 qwords) and floored at 8 so very
+             * small requests still get a useful window. If the small
+             * read doesn't find enough matches we fall back to the full
+             * 100-qword read below. */
+            const int small_size = std::min<int>(stack_check_size,
+                                                 std::max<int>(8, m_watch_data.stack_check_count * 4));
+            bool need_full_read = false;
+            if (R_FAILED(m_debug_process.ReadMemory(buffer, thread_context.sp, small_size * sizeof(u64)))) {
+                /* Read at sp failed - either we crossed a page boundary
+                 * or the stack is unmapped here. Fall back to the
+                 * original "query then clamp" path. */
+                if (R_SUCCEEDED(m_debug_process.QueryMemory(&meminfo, thread_context.sp))) {
                     check_size = (meminfo.base_address + meminfo.size - thread_context.sp) / sizeof(u64);
-                if (R_FAILED(m_debug_process.ReadMemory(buffer, thread_context.sp, check_size * sizeof(u64))))
+                }
+                if (R_FAILED(m_debug_process.ReadMemory(buffer, thread_context.sp, check_size * sizeof(u64)))) {
                     check_size = 0;
-            };
-            for (int i = 0; i < check_size && index < m_watch_data.stack_check_count; i++) {
-                if ((m_watch_data.main_start <= buffer[i]) && (buffer[i] < m_watch_data.main_end)) {
-                    m_from_stack.stack[index].code_offset = ((buffer[i] - m_watch_data.main_start) & 0x7FFFFFF) >> 2;
-                    m_from_stack.stack[index].SP_offset = i;
+                }
+            } else {
+                check_size = small_size;
+            }
+
+            int scanned = 0;
+            for (; scanned < check_size && index < m_watch_data.stack_check_count; scanned++) {
+                if ((m_watch_data.main_start <= buffer[scanned]) && (buffer[scanned] < m_watch_data.main_end)) {
+                    m_from_stack.stack[index].code_offset = ((buffer[scanned] - m_watch_data.main_start) & 0x7FFFFFF) >> 2;
+                    m_from_stack.stack[index].SP_offset = scanned;
                     index++;
                 };
+            }
+
+            /* Didn't find enough matches in the small window; read the
+             * rest of the stack and continue scanning. */
+            if (index < m_watch_data.stack_check_count && check_size == small_size && small_size < stack_check_size) {
+                need_full_read = true;
+            }
+            if (need_full_read) {
+                const int remaining = stack_check_size - small_size;
+                if (R_SUCCEEDED(m_debug_process.ReadMemory(buffer + small_size,
+                                                            thread_context.sp + small_size * sizeof(u64),
+                                                            remaining * sizeof(u64)))) {
+                    for (int i = small_size; i < stack_check_size && index < m_watch_data.stack_check_count; i++) {
+                        if ((m_watch_data.main_start <= buffer[i]) && (buffer[i] < m_watch_data.main_end)) {
+                            m_from_stack.stack[index].code_offset = ((buffer[i] - m_watch_data.main_start) & 0x7FFFFFF) >> 2;
+                            m_from_stack.stack[index].SP_offset = i;
+                            index++;
+                        }
+                    }
+                }
             }
         };
         if (m_watch_data.stack_check_count < max_call_stack) {
@@ -1189,6 +1403,12 @@ namespace ams::dmnt {
                         switch (d.info.exception.type) {
                             case svc::DebugException_BreakPoint:
                                 {
+                                    /* All capture-side updates below mutate m_watch_data
+                                     * (intercepted/next_pc/failed/fromU/count/total_trigger).
+                                     * Lock against the gen2_loop poll thread and the
+                                     * dmnt:cht IPC handlers for the duration. See Opt 3. */
+                                    std::scoped_lock _wd_lk(g_watch_data_lock);
+
                                     signal = GdbSignal_BreakpointTrap;
 
                                     const uintptr_t address = d.info.exception.address;
@@ -1338,12 +1558,47 @@ namespace ams::dmnt {
                                                 }
                                             }
                                         } else {
+                                            /* Hardware instruction breakpoint that doesn't match
+                                             * the gen2 watch (`m_watch_data.address`) or its
+                                             * next_pc re-arm slot. Three scenarios reach here:
+                                             *
+                                             *  1. A real GDB client set a `Z1` hardware BP we
+                                             *     don't own; we forward the stop reply.
+                                             *  2. The BP was gen2's next_pc re-arm slot but
+                                             *     CLEARW just zeroed m_watch_data.next_pc
+                                             *     (and m_watch_data.address) so it no longer
+                                             *     matches when this stale fire arrives.
+                                             *  3. The BP was gen2's watched instruction but
+                                             *     CLEARW just zeroed m_watch_data.address.
+                                             *
+                                             * For (2) and (3) the game thread is suspended on a
+                                             * stale gen2 trap; we MUST Continue() or the game
+                                             * hangs (and Switch OS eventually kills it as
+                                             * unresponsive - this manifests as "game crashes
+                                             * when I change the watch", see addendum 14).
+                                             *
+                                             * Detect raw mode (no GDB client) via
+                                             * !m_session.IsValid(). In raw mode the stop reply
+                                             * has no recipient anyway, so just Continue.
+                                             */
                                             m_watch_data.intercepted = false;
-                                            AppendReplyFormat(reply_cur, reply_end, "T%02Xthread:p%lx.%lx;hwbreak:;", static_cast<u32>(signal), m_process_id.value, thread_id);
+                                            if (!m_session.IsValid()) {
+                                                m_debug_process.Continue();
+                                            } else {
+                                                AppendReplyFormat(reply_cur, reply_end, "T%02Xthread:p%lx.%lx;hwbreak:;", static_cast<u32>(signal), m_process_id.value, thread_id);
+                                            }
                                         }
                                     } else {
                                         bool read = false, write = false;
                                         const char *type = "watch";
+                                        /* GetWatchPointInfo iterates the active WP slots and
+                                         * returns success iff `address` lies inside one of
+                                         * them. We use it for the GDB protocol's rwatch/
+                                         * awatch type label, but NOT as the gen2 owner
+                                         * check - the kernel can report a fault address
+                                         * that lies outside the configured user range
+                                         * (e.g. for BAS-masked watches it can report the
+                                         * qword-aligned base). */
                                         if (R_SUCCEEDED(m_debug_process.GetWatchPointInfo(address, read, write))) {
                                             if (read && write) {
                                                 type = "awatch";
@@ -1354,7 +1609,31 @@ namespace ams::dmnt {
                                             AMS_DMNT2_GDB_LOG_DEBUG("GetWatchPointInfo FAIL %lx, addr=%lx, type=%s\n", thread_id, address, is_instr ? "Instr" : "Data");
                                         }
 
-                                        if (address == m_watch_data.address || (address & -32) == (m_watch_data.address & -32) || m_watch_data.gen2loop_on == 2) {
+                                        /* Claim the hit as the gen2 watch using a fuzzy
+                                         * address-band match.  ARMv8 watchpoint hardware
+                                         * can report a fault address that differs from
+                                         * the configured base by up to the BAS / mask
+                                         * coverage of the watch - typically less than 32
+                                         * bytes for small watches.
+                                         *
+                                         * The historical band was a fixed 32 bytes which
+                                         * silently swallowed unrelated GDB Z2/Z3/Z4
+                                         * watches falling within that band (see design
+                                         * doc Bug 2). We now use max(32, watch_size) so
+                                         * larger range watches still match while smaller
+                                         * unrelated watches outside ~32 B are correctly
+                                         * passed through to the GDB client.
+                                         *
+                                         * The gen2loop_on == 2 raw-mode override is
+                                         * preserved: when no GDB session is connected,
+                                         * any WP hit must be a gen2 one by elimination.
+                                         */
+                                        const u64 band = std::max<u64>(32, m_watch_data.size);
+                                        const u64 our_lo = util::AlignDown(m_watch_data.address, band);
+                                        const u64 our_hi = our_lo + band;
+                                        const bool in_band = (m_watch_data.size > 0)
+                                            && (address >= our_lo) && (address < our_hi);
+                                        if (address == m_watch_data.address || in_band || m_watch_data.gen2loop_on == 2) {
                                             m_watch_data.intercepted = true;
                                             /* Clear the watch point */
                                             if (R_SUCCEEDED(m_debug_process.ClearWatchPoint( m_watch_data.address, m_watch_data.size))) {
@@ -1395,8 +1674,20 @@ namespace ams::dmnt {
                                                 m_watch_data.failed = 3;
                                             };
                                         } else {
+                                            /* Hardware data watchpoint that doesn't match the
+                                             * gen2 watch band. Same shape as the instruction-BP
+                                             * non-match branch above: in raw mode we must
+                                             * Continue() the suspended game thread, otherwise
+                                             * a stale gen2 WP firing after CLEARW (which zeroed
+                                             * m_watch_data.address) would freeze the game until
+                                             * the OS killed it. See addendum 14.
+                                             */
                                             m_watch_data.intercepted = false;
-                                            AppendReplyFormat(reply_cur, reply_end, "T%02Xthread:p%lx.%lx;%s:%lx;", static_cast<u32>(signal), m_process_id.value, thread_id, type, address);
+                                            if (!m_session.IsValid()) {
+                                                m_debug_process.Continue();
+                                            } else {
+                                                AppendReplyFormat(reply_cur, reply_end, "T%02Xthread:p%lx.%lx;%s:%lx;", static_cast<u32>(signal), m_process_id.value, thread_id, type, address);
+                                            }
                                         }
                                     }
 
@@ -1603,7 +1894,6 @@ namespace ams::dmnt {
                     break;
                 case svc::DebugEvent_ExitProcess:
                     {
-                        m_killed = true;
                         AMS_DMNT2_GDB_LOG_DEBUG("ExitProcess\n");
 
                         if (d.info.exit_process.reason == svc::ProcessExitReason_ExitProcess) {
@@ -1612,7 +1902,25 @@ namespace ams::dmnt {
                             AppendReplyFormat(reply_cur, reply_end, "X%02X", GdbSignal_Killed);
                         }
 
+                        /* Tear down the debug-process state in either case. */
                         m_debug_process.Detach();
+
+                        /* Only mark the whole GdbServerImpl as killed when
+                         * there's a real GDB client connected. Otherwise
+                         * (raw mode / IPC-only / dummy) we want the
+                         * DebugEventsThread to fall back to its outer
+                         * wait-for-next-attach loop so the next gen2
+                         * ATTACH from Breeze / bookmark.ovl is serviced.
+                         *
+                         * Without this, the events thread exited the
+                         * moment any debugged game crashed, leaving
+                         * Gen2Attach with no waiter and forcing the
+                         * user to sleep/wake the console to recover.
+                         * See gen2fork_design_and_review.md addendum 9.
+                         */
+                        if (m_session.IsValid()) {
+                            m_killed = true;
+                        }
                     }
                     break;
                 default:
@@ -2161,13 +2469,23 @@ namespace ams::dmnt {
                 /* Set our process id. */
                 m_process_id = { process_id };
 
-                /* Wait for us to be attached. */
+                /* Post the attach request to the events thread.
+                 * Same predicate + same-mutex pattern as Gen2Attach;
+                 * see g_attach_request_pending. */
                 {
-                    std::scoped_lock lk(g_event_request_lock);
+                    std::scoped_lock lk(g_event_lock);
+                    g_attach_done            = false;
+                    g_attach_request_pending = true;
                     g_event_request_cv.Signal();
-                    if (!g_event_done_cv.TimedWait(g_event_request_lock, TimeSpan::FromSeconds(2))) {
-                        m_event.Signal();
+
+                    const auto start  = os::GetSystemTick();
+                    const auto budget = TimeSpan::FromSeconds(2);
+                    while (!g_attach_done) {
+                        const auto elapsed = os::ConvertToTimeSpan(os::GetSystemTick() - start);
+                        if (elapsed >= budget) break;
+                        (void)g_event_done_cv.TimedWait(g_event_lock, budget - elapsed);
                     }
+                    g_attach_request_pending = false;
                 }
 
                 /* If we're attached, send a stop reply packet. */
@@ -2358,12 +2676,40 @@ namespace ams::dmnt {
         sprintf(m_watch_data.name, "undefine");
         m_watch_data.base = 0;
         m_watch_data.offset = m_watch_data.address;
-        for (size_t i = 0; i < m_debug_process.GetModuleCount(); ++i) {
-            if (m_debug_process.GetModuleBaseAddress(i) <= address && address < m_debug_process.GetModuleBaseAddress(i) + m_debug_process.GetModuleSize(i)) {
-                m_watch_data.base = m_debug_process.GetModuleBaseAddress(i);
-                m_watch_data.offset = address - m_debug_process.GetModuleBaseAddress(i);
-                m_watch_data.module_name = m_debug_process.GetModuleName(i);
-                return;
+
+        /* Binary search the module list for the one containing `address`.
+         * CollectModules() walks the address space low-to-high, so the
+         * module array is already sorted by base address. Modules may
+         * have small gaps (text+rodata then data is a separate region),
+         * so we look for the rightmost module whose base <= address and
+         * then range-check explicitly. See design doc Opt 5.
+         *
+         * Previous linear scan was O(n) per call. `qRcmd getw` calls
+         * this once per capture entry (up to 512) on every status query,
+         * which was the dominant cost of the response. */
+        const size_t module_count = m_debug_process.GetModuleCount();
+        if (module_count > 0) {
+            size_t lo = 0, hi = module_count;
+            while (lo < hi) {
+                const size_t mid = lo + (hi - lo) / 2;
+                if (m_debug_process.GetModuleBaseAddress(mid) <= address) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            /* `lo` is the first module strictly above address; the
+             * candidate is the one just before it. */
+            if (lo > 0) {
+                const size_t cand = lo - 1;
+                const u64 base = m_debug_process.GetModuleBaseAddress(cand);
+                const u64 size = m_debug_process.GetModuleSize(cand);
+                if (address < base + size) {
+                    m_watch_data.base = base;
+                    m_watch_data.offset = address - base;
+                    m_watch_data.module_name = m_debug_process.GetModuleName(cand);
+                    return;
+                }
             }
         }
         if (m_debug_process.GetAliasRegionAddress() <= address && address < m_debug_process.GetAliasRegionAddress() + m_debug_process.GetAliasRegionSize()) {
