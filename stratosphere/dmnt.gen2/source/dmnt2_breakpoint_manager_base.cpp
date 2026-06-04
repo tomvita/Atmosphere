@@ -40,6 +40,16 @@ namespace ams::dmnt {
         }
     }
 
+    bool BreakPointManagerBase::HasBreakPoint(uintptr_t address) {
+        BreakPointBase *bp = nullptr;
+        for (size_t i = 0; (bp = static_cast<BreakPointBase *>(this->GetBreakPoint(i))) != nullptr; ++i) {
+            if (bp->m_in_use && bp->m_address == address) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     Result BreakPointManagerBase::ClearBreakPoint(uintptr_t address, size_t size) {
         BreakPointBase *bp = nullptr;
         for (size_t i = 0; (bp = static_cast<BreakPointBase *>(this->GetBreakPoint(i))) != nullptr; ++i) {

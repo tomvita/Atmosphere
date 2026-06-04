@@ -154,6 +154,7 @@ namespace ams::dmnt {
             Result Step();
             Result Step(u64 thread_id);
             void ClearStep();
+            bool IsStepping() const { return m_stepping; }
 
             Result Break();
 
@@ -161,6 +162,8 @@ namespace ams::dmnt {
 
             Result SetBreakPoint(uintptr_t address, size_t size, bool is_step);
             Result ClearBreakPoint(uintptr_t address, size_t size);
+            bool HasSoftwareBreakPoint(uintptr_t address) { return m_software_breakpoints.HasBreakPoint(address); }
+            u32 GetSoftwareBreakPointOriginalInstruction(uintptr_t address) { return m_software_breakpoints.GetOriginalInstruction(address); }
 
             Result SetHardwareBreakPoint(uintptr_t address, size_t size, bool is_step);
             Result ClearHardwareBreakPoint(uintptr_t address, size_t size);

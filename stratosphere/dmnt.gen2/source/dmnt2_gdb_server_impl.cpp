@@ -64,6 +64,54 @@ namespace ams::dmnt {
                  * compatibility with older clients but is no longer the source
                  * of truth - the free-standing g_gen2_server_on is. */
                 m_watch_data.gen2loop_on = m_session.IsValid() ? 1 : g_gen2_server_on;
+
+                if (m_watch_data.attached) {
+                    m_watch_data.bp_hit = (m_debug_process.GetStatus() == DebugProcess::ProcessStatus_DebugBreak);
+                    if (m_watch_data.bp_hit) {
+                        m_watch_data.bp_thread_id = m_debug_process.GetLastThreadId();
+                        if (!m_watch_data.execute || m_watch_data.command != SETREGS) {
+                            svc::ThreadContext ctx{};
+                            if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(ctx), m_watch_data.bp_thread_id, svc::ThreadContextFlag_All))) {
+                                m_watch_data.bp_ctx = ctx;
+                                m_watch_data.bp_addr = ctx.pc;
+                                m_watch_data.bp_original_insn = m_debug_process.GetSoftwareBreakPointOriginalInstruction(ctx.pc);
+                            }
+                        }
+                    } else {
+                        m_watch_data.bp_thread_id = 0;
+                        m_watch_data.bp_original_insn = 0;
+                    }
+
+                    if (m_step_pending && m_watch_data.bp_hit) {
+                        if (m_step_original_pc != 0) {
+                            m_debug_process.SetBreakPoint(m_step_original_pc, 4, false);
+                        }
+                        if (m_watchpoint_rearm_pending) {
+                            m_debug_process.SetWatchPoint(m_watch_data.address, m_watch_data.size, m_watch_data.read, m_watch_data.write);
+                            m_watchpoint_rearm_pending = false;
+                        }
+                        if (m_instruction_rearm_pending) {
+                            m_debug_process.SetHardwareBreakPoint(m_watch_data.address, m_watch_data.size, false);
+                            m_instruction_rearm_pending = false;
+                        }
+                        m_step_pending = false;
+                        m_step_original_pc = 0;
+                        if (m_continue_after_step) {
+                            m_continue_after_step = false;
+                            m_debug_process.Continue();
+                        }
+                    }
+                } else {
+                    m_watch_data.bp_hit = false;
+                    m_watch_data.bp_thread_id = 0;
+                    m_watch_data.bp_original_insn = 0;
+                    m_step_pending = false;
+                    m_step_original_pc = 0;
+                    m_watchpoint_rearm_pending = false;
+                    m_instruction_rearm_pending = false;
+                    m_continue_after_step = false;
+                }
+
                 if (!m_watch_data.execute) {
                     return m_watch_data.gen2loop_on;
                 }
@@ -103,6 +151,9 @@ namespace ams::dmnt {
                 case DETACH: {
                     std::scoped_lock lk(g_watch_data_lock);
                     clearw();
+                    m_watch_data.bp_hit = false;
+                    m_watch_data.bp_thread_id = 0;
+                    m_watch_data.bp_original_insn = 0;
                     m_debug_process.Detach();
 #if !defined(DMNT_GEN2_NO_CHEATVM)
                     dmnt::cheat::impl::SuspendDebugEvents(false);
@@ -151,12 +202,176 @@ namespace ams::dmnt {
                     break;
                 case CONT:
                     if (this->HasDebugProcess()) {
-                        m_debug_process.Continue();
+                        u64 thread_id = m_watch_data.bp_thread_id;
+                        if (thread_id == 0 || thread_id == static_cast<u64>(-1)) {
+                            thread_id = m_debug_process.GetLastThreadId();
+                        }
+                        svc::ThreadContext ctx;
+                        bool has_bp = false;
+                        if (thread_id != 0 && R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(ctx), thread_id, svc::ThreadContextFlag_Control))) {
+                            has_bp = m_debug_process.HasSoftwareBreakPoint(ctx.pc);
+                        }
+                        const bool has_wp = m_watch_data.bp_hit && m_watch_data.address != 0 && (m_watch_data.read || m_watch_data.write);
+                        const bool has_ib = m_watch_data.bp_hit && m_watch_data.address != 0 && !m_watch_data.read && !m_watch_data.write;
+                        if (has_bp) {
+                            m_debug_process.ClearBreakPoint(ctx.pc, 4);
+                            m_step_pending = true;
+                            m_step_original_pc = ctx.pc;
+                            m_continue_after_step = true;
+                            m_debug_process.Step(thread_id);
+                            m_debug_process.Continue(thread_id);
+                        } else if (has_wp) {
+                            m_step_pending = true;
+                            m_watchpoint_rearm_pending = true;
+                            m_continue_after_step = true;
+                            m_debug_process.Step(thread_id);
+                            m_debug_process.Continue(thread_id);
+                        } else if (has_ib) {
+                            m_step_pending = true;
+                            m_instruction_rearm_pending = true;
+                            m_continue_after_step = true;
+                            m_debug_process.Step(thread_id);
+                            m_debug_process.Continue(thread_id);
+                        } else {
+                            if (m_watch_data.address != 0) {
+                                if (m_watch_data.read || m_watch_data.write) {
+                                    m_debug_process.SetWatchPoint(m_watch_data.address, m_watch_data.size, m_watch_data.read, m_watch_data.write);
+                                } else {
+                                    m_debug_process.SetHardwareBreakPoint(m_watch_data.address, m_watch_data.size, false);
+                                }
+                            }
+                            m_debug_process.Continue();
+                        }
                     }
                     break;
                 case INCPC: {
                     std::scoped_lock lk(g_watch_data_lock);
                     m_watch_data.next_pc++;
+                    break;
+                }
+                case SETB: {
+                    std::scoped_lock lk(g_watch_data_lock);
+                    if (this->HasDebugProcess()) {
+                        m_debug_process.SetBreakPoint(m_watch_data.bp_addr & 0x7FFFFFFFFFULL, 4, false);
+                    }
+                    break;
+                }
+                case CLEARB: {
+                    std::scoped_lock lk(g_watch_data_lock);
+                    if (this->HasDebugProcess()) {
+                        m_debug_process.ClearBreakPoint(m_watch_data.bp_addr & 0x7FFFFFFFFFULL, 4);
+                        if (m_step_pending && m_step_original_pc == (m_watch_data.bp_addr & 0x7FFFFFFFFFULL)) {
+                            m_step_pending = false;
+                            m_step_original_pc = 0;
+                        }
+                    }
+                    break;
+                }
+                case STEP: {
+                    std::scoped_lock lk(g_watch_data_lock);
+                    if (this->HasDebugProcess()) {
+                        u64 thread_id = m_watch_data.bp_thread_id;
+                        if (thread_id == 0 || thread_id == static_cast<u64>(-1)) {
+                            thread_id = m_debug_process.GetLastThreadId();
+                        }
+                        if (thread_id != 0) {
+                            svc::ThreadContext ctx;
+                            if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(ctx), thread_id, svc::ThreadContextFlag_Control))) {
+                                u64 pc = ctx.pc;
+                                bool has_bp = m_debug_process.HasSoftwareBreakPoint(pc);
+                                const bool has_wp = m_watch_data.bp_hit && m_watch_data.address != 0 && (m_watch_data.read || m_watch_data.write);
+                                const bool has_ib = m_watch_data.bp_hit && m_watch_data.address != 0 && !m_watch_data.read && !m_watch_data.write;
+                                if (has_bp) {
+                                    m_debug_process.ClearBreakPoint(pc, 4);
+                                    m_step_pending = true;
+                                    m_step_original_pc = pc;
+                                } else if (has_wp || has_ib) {
+                                    m_step_pending = true;
+                                }
+                                if (m_watch_data.address != 0) {
+                                    if (m_watch_data.read || m_watch_data.write) {
+                                        m_watchpoint_rearm_pending = true;
+                                    } else {
+                                        m_instruction_rearm_pending = true;
+                                    }
+                                }
+                                m_continue_after_step = false;
+                                m_debug_process.Step(thread_id);
+                                m_debug_process.Continue(thread_id);
+                            }
+                        }
+                    }
+                    break;
+                }
+                case STEPOVER: {
+                    std::scoped_lock lk(g_watch_data_lock);
+                    if (this->HasDebugProcess()) {
+                        u64 thread_id = m_watch_data.bp_thread_id;
+                        if (thread_id == 0 || thread_id == static_cast<u64>(-1)) {
+                            thread_id = m_debug_process.GetLastThreadId();
+                        }
+                        if (thread_id != 0) {
+                            svc::ThreadContext ctx;
+                            if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(ctx), thread_id, svc::ThreadContextFlag_Control))) {
+                                u64 pc = ctx.pc;
+                                u32 insn = 0;
+                                m_debug_process.ReadMemory(std::addressof(insn), pc, sizeof(insn));
+                                bool is_call = false;
+                                if ((insn & 0xFC000000) == 0x94000000) { // bl
+                                    is_call = true;
+                                } else if ((insn & 0xFFFFFC1F) == 0xD63F0000) { // blr
+                                    is_call = true;
+                                }
+                                bool has_bp = m_debug_process.HasSoftwareBreakPoint(pc);
+                                const bool has_wp = m_watch_data.bp_hit && m_watch_data.address != 0 && (m_watch_data.read || m_watch_data.write);
+                                const bool has_ib = m_watch_data.bp_hit && m_watch_data.address != 0 && !m_watch_data.read && !m_watch_data.write;
+                                if (has_bp) {
+                                    m_debug_process.ClearBreakPoint(pc, 4);
+                                }
+                                if (m_watch_data.address != 0) {
+                                    if (m_watch_data.read || m_watch_data.write) {
+                                        m_watchpoint_rearm_pending = true;
+                                    } else {
+                                        m_instruction_rearm_pending = true;
+                                    }
+                                }
+                                m_continue_after_step = false;
+                                if (is_call) {
+                                    m_debug_process.SetBreakPoint(pc + 4, 4, true); // set step breakpoint
+                                    m_step_pending = true;
+                                    m_step_original_pc = has_bp ? pc : 0;
+                                    m_debug_process.Continue();
+                                } else {
+                                    if (has_bp) {
+                                        m_step_pending = true;
+                                        m_step_original_pc = pc;
+                                    } else if (has_wp || has_ib) {
+                                        m_step_pending = true;
+                                    }
+                                    m_debug_process.Step(thread_id);
+                                    m_debug_process.Continue(thread_id);
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+                case SETREGS: {
+                    std::scoped_lock lk(g_watch_data_lock);
+                    if (this->HasDebugProcess()) {
+                        u64 thread_id = m_watch_data.bp_thread_id;
+                        if (thread_id == 0 || thread_id == static_cast<u64>(-1)) {
+                            thread_id = m_debug_process.GetLastThreadId();
+                        }
+                        if (thread_id != 0) {
+                            Result rc = m_debug_process.SetThreadContext(std::addressof(m_watch_data.bp_ctx), thread_id, svc::ThreadContextFlag_All);
+                            if (R_FAILED(rc)) {
+                                m_watch_data.failed = rc.GetValue();
+                            } else {
+                                m_debug_process.GetThreadContext(std::addressof(m_watch_data.bp_ctx), thread_id, svc::ThreadContextFlag_All);
+                            }
+                        }
+                    }
                     break;
                 }
             };
@@ -1391,6 +1606,7 @@ namespace ams::dmnt {
             GdbSignal signal;
             char send_buffer[GdbPacketBufferSize];
             u64 thread_id = d.thread_id;
+            const bool was_stepping = m_debug_process.IsStepping();
             m_debug_process.ClearStep();
 
             char *       reply_cur = send_buffer;
@@ -1410,12 +1626,29 @@ namespace ams::dmnt {
                                     std::scoped_lock _wd_lk(g_watch_data_lock);
 
                                     signal = GdbSignal_BreakpointTrap;
-
                                     const uintptr_t address = d.info.exception.address;
                                     const bool is_instr     = d.info.exception.specific.break_point.type == svc::BreakPointType_HardwareInstruction;
-                                    AMS_DMNT2_GDB_LOG_DEBUG("BreakPoint %lx, addr=%lx, type=%s\n", thread_id, address, is_instr ? "Instr" : "Data");
+                                    const bool is_watchpoint = d.info.exception.specific.break_point.type == svc::BreakPointType_HardwareData;
+                                    AMS_DMNT2_GDB_LOG_DEBUG("BreakPoint %lx, addr=%lx, type=%s\n", thread_id, address, is_instr ? "Instr" : (is_watchpoint ? "Data" : "Software/Step"));
 
-                                    if (is_instr) {
+                                    if ((!is_instr && !is_watchpoint) || was_stepping) {
+                                         m_watch_data.intercepted = true;
+                                         m_watch_data.bp_hit = true;
+                                         m_debug_process.SetDebugBreaked();
+                                         m_watch_data.bp_thread_id = thread_id;
+                                         svc::ThreadContext thread_context;
+                                         if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(thread_context), thread_id, svc::ThreadContextFlag_All))) {
+                                             m_watch_data.bp_ctx = thread_context;
+                                             m_watch_data.bp_addr = thread_context.pc;
+                                             m_watch_data.bp_original_insn = m_debug_process.GetSoftwareBreakPointOriginalInstruction(thread_context.pc);
+                                         }
+                                         if (m_session.IsValid()) {
+                                             AppendReplyFormat(reply_cur, reply_end, "T%02Xthread:p%lx.%lx;", static_cast<u32>(signal), m_process_id.value, thread_id);
+                                         }
+                                         if (m_step_pending && m_continue_after_step) {
+                                             g_gen2_request_event.Signal();
+                                         }
+                                     } else if (is_instr) {
                                         if (address == m_watch_data.next_pc || address == m_watch_data.address) {
                                             m_watch_data.intercepted = true;
                                             if (R_FAILED(m_debug_process.ClearHardwareBreakPoint(address, (address == m_watch_data.next_pc) ? 4 : m_watch_data.size))) {
@@ -1442,112 +1675,136 @@ namespace ams::dmnt {
                                                         //     return true;
                                                         // };
                                                         if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(thread_context), thread_id, svc::ThreadContextFlag_All))) {
-                                                            u64 X30_alternative;
-                                                            switch (m_watch_data.x30_catch_type) {
-                                                                case OFFSET:
-                                                                    X30_alternative = (thread_context.lr);
-                                                                    break;
-                                                                case STACK:
-                                                                    if (R_FAILED(m_debug_process.ReadMemory(&X30_alternative, thread_context.sp + m_watch_data.caller_SP_offset*8, sizeof(X30_alternative)))) {
-                                                                        m_watch_data.failed = 8;
-                                                                        X30_alternative = 0;
-                                                                    };
-                                                                    X30_alternative = X30_alternative & (-4);
-                                                                    break;
-                                                                default:
-                                                                    X30_alternative = m_watch_data.main_start;
-                                                                    break;
-                                                            };
+                                                            bool is_trigger_bp = false;
+                                                            if (m_watch_data.bp_match_trigger) {
+                                                                if ((thread_context.pc & 0x7FFFFFFFFFULL) == (m_watch_data.bp_match_pc & 0x7FFFFFFFFFULL) &&
+                                                                    (thread_context.lr & 0x7FFFFFFFFFULL) == (m_watch_data.bp_match_lr & 0x7FFFFFFFFFULL)) {
+                                                                    is_trigger_bp = true;
+                                                                }
+                                                            }
+
+                                                            if (is_trigger_bp) {
+                                                                m_watch_data.bp_hit = true;
+                                                                m_debug_process.SetDebugBreaked();
+                                                                m_watch_data.bp_thread_id = thread_id;
+                                                                m_watch_data.bp_ctx = thread_context;
+                                                                m_watch_data.bp_addr = thread_context.pc;
+                                                                m_watch_data.bp_original_insn = 0;
+                                                            } else if (m_watch_data.bp_match_trigger) {
+                                                                m_watch_data.next_pc = thread_context.pc + 4;
+                                                                if (R_FAILED(m_debug_process.SetHardwareBreakPoint(m_watch_data.next_pc, 4, false))) {
+                                                                    m_watch_data.failed = 7;
+                                                                }
+                                                                m_debug_process.Continue();
+                                                            } else {
+                                                                u64 X30_alternative;
+                                                                switch (m_watch_data.x30_catch_type) {
+                                                                    case OFFSET:
+                                                                        X30_alternative = (thread_context.lr);
+                                                                        break;
+                                                                    case STACK:
+                                                                        if (R_FAILED(m_debug_process.ReadMemory(&X30_alternative, thread_context.sp + m_watch_data.caller_SP_offset*8, sizeof(X30_alternative)))) {
+                                                                            m_watch_data.failed = 8;
+                                                                            X30_alternative = 0;
+                                                                        };
+                                                                        X30_alternative = X30_alternative & (-4);
+                                                                        break;
+                                                                    default:
+                                                                        X30_alternative = m_watch_data.main_start;
+                                                                        break;
+                                                                };
 #define FROM_U(i) (m_watch_data.fromU.from3[i])
 #define Match_U(i) ((FROM_U(i).x30_offset == x30_catch) && (memcmp(&(FROM_U(i).stack[0]), &(entry.stack[0]), sizeof(call_stack_t) * m_watch_data.stack_check_count) == 0))
 #define IS_CURRENT_ADDRESS(i) (FROM_U(i).address == m_watch_data.address)
 
-                                                            if (m_watch_data.x30_catch_type == EXCLUSIVE_SEARCH) {
-                                                                u64 target_address = (thread_context.r[m_watch_data.i] + (m_watch_data.two_register ? (thread_context.r[m_watch_data.j] << m_watch_data.k) : m_watch_data.offset));
-                                                                if (m_watch_data.target_address != target_address) {
-                                                                    u32 x30_catch = (thread_context.lr - m_watch_data.main_start) >> 2;
-                                                                    auto entry = get_from_stack(thread_context,false);
-                                                                    u32 index = 0;
-                                                                    while (index < m_watch_data.exclusive_search_count && IS_CURRENT_ADDRESS(index)) {
-                                                                        if (Match_U(index)) {
-                                                                            for (int i = index; i < m_watch_data.exclusive_search_count - 1; i++)
-                                                                                memcpy(&FROM_U(i), &FROM_U(i + 1), sizeof(m_from3_t));
-                                                                            m_watch_data.exclusive_search_count--;
-                                                                            if (m_watch_data.exclusive_search_count != 0 && FROM_U(0).address != m_watch_data.address) {
-                                                                                set_next_watch_for_exclusive_search();
-                                                                            } else if (m_watch_data.exclusive_search_count == 0) {
-                                                                                clearw();
+                                                                if (m_watch_data.x30_catch_type == EXCLUSIVE_SEARCH) {
+                                                                    u64 target_address = (thread_context.r[m_watch_data.i] + (m_watch_data.two_register ? (thread_context.r[m_watch_data.j] << m_watch_data.k) : m_watch_data.offset));
+                                                                    if (m_watch_data.target_address != target_address) {
+                                                                        u32 x30_catch = (thread_context.lr - m_watch_data.main_start) >> 2;
+                                                                        auto entry = get_from_stack(thread_context,false);
+                                                                        u32 index = 0;
+                                                                        while (index < m_watch_data.exclusive_search_count && IS_CURRENT_ADDRESS(index)) {
+                                                                            if (Match_U(index)) {
+                                                                                for (int i = index; i < m_watch_data.exclusive_search_count - 1; i++)
+                                                                                    memcpy(&FROM_U(i), &FROM_U(i + 1), sizeof(m_from3_t));
+                                                                                m_watch_data.exclusive_search_count--;
+                                                                                if (m_watch_data.exclusive_search_count != 0 && FROM_U(0).address != m_watch_data.address) {
+                                                                                    set_next_watch_for_exclusive_search();
+                                                                                } else if (m_watch_data.exclusive_search_count == 0) {
+                                                                                    clearw();
+                                                                                }
                                                                             }
+                                                                            index++;
                                                                         }
-                                                                        index++;
+                                                                    } else {
+                                                                        m_watch_data.count = m_watch_data.exclusive_search_count;
+                                                                        u32 x30_catch = (thread_context.lr - m_watch_data.main_start) >> 2;
+                                                                        auto entry = get_from_stack(thread_context, false);
+                                                                        if Match_U (0)
+                                                                            m_watch_data.exclusive_search_target_trigger++;
                                                                     }
-                                                                } else {
-                                                                    m_watch_data.count = m_watch_data.exclusive_search_count;
-                                                                    u32 x30_catch = (thread_context.lr - m_watch_data.main_start) >> 2;
-                                                                    auto entry = get_from_stack(thread_context, false);
-                                                                    if Match_U (0)
-                                                                        m_watch_data.exclusive_search_target_trigger++;
+                                                                } else if ((m_watch_data.check_x30 == false) || ((X30_alternative & 0xFFFF) == m_watch_data.x30_match) || (m_watch_data.x30_catch_type == R_MATCH && thread_context.r[m_watch_data.Register] == m_watch_data.Register_match_value)) {
+                                                                    u64 ret_Rvalue = (thread_context.r[m_watch_data.i] + (m_watch_data.two_register ? (thread_context.r[m_watch_data.j] << m_watch_data.k) : 0)) | ((X30_alternative - m_watch_data.main_start) << (64 - 27));
+                                                                    bool found = false;
+                                                                    if ((m_watch_data.stack_check_count > 0) || m_watch_data.grab_A || m_watch_data.grab_R) {
+                                                                        auto entry = get_from_stack(thread_context,false);
+                                                                        entry.address = ret_Rvalue;
+                                                                        for (int i = 0; i < m_watch_data.count; i++) {
+                                                                            if (memcmp(&(m_watch_data.fromU.from2[i].from_stack), &entry, sizeof(m_from_stack_t)) == 0) {
+                                                                                (m_watch_data.fromU.from2[i].count)++;
+                                                                                found = true;
+                                                                            }
+                                                                        };
+                                                                        if (!found && m_watch_data.count < max_watch_buffer2) {
+                                                                            u64 value = 0;
+                                                                            if (m_watch_data.range_check) {
+                                                                                u64 address = thread_context.r[m_watch_data.i] + m_watch_data.offset;
+                                                                                if (R_FAILED(m_debug_process.ReadMemory(&value, address, m_watch_data.vsize))) {
+                                                                                    m_watch_data.failed = 9;
+                                                                                };
+                                                                            }
+                                                                            if (!m_watch_data.range_check || (m_watch_data.v1 <= value && value <= m_watch_data.v2)) {
+                                                                                m_watch_data.fromU.from2[m_watch_data.count].from_stack = entry;
+                                                                                m_watch_data.fromU.from2[m_watch_data.count].count = 1;
+                                                                                m_watch_data.count++;
+                                                                            };
+                                                                        }
+                                                                    } else {
+                                                                        for (int i = 0; i < m_watch_data.count; i++) {
+                                                                            if (m_watch_data.fromU.from[i].address == ret_Rvalue) {
+                                                                                (m_watch_data.fromU.from[i].count)++;
+                                                                                found = true;
+                                                                            }
+                                                                        };
+                                                                        if (!found && m_watch_data.count < max_watch_buffer) {
+                                                                            u64 value = 0;
+                                                                            if (m_watch_data.range_check) {
+                                                                                u64 address = thread_context.r[m_watch_data.i] + m_watch_data.offset;
+                                                                                if (R_FAILED(m_debug_process.ReadMemory(&value, address, m_watch_data.vsize))) {
+                                                                                    m_watch_data.failed = 10;
+                                                                                };
+                                                                            }
+                                                                            if (!m_watch_data.range_check || (m_watch_data.v1 <= value && value <= m_watch_data.v2)) {
+                                                                                m_watch_data.fromU.from[m_watch_data.count].address = ret_Rvalue;
+                                                                                m_watch_data.fromU.from[m_watch_data.count].count = 1;
+                                                                                m_watch_data.count++;
+                                                                            };
+                                                                        }
+                                                                    }
                                                                 }
-                                                            } else if ((m_watch_data.check_x30 == false) || ((X30_alternative & 0xFFFF) == m_watch_data.x30_match) || (m_watch_data.x30_catch_type == R_MATCH && thread_context.r[m_watch_data.Register] == m_watch_data.Register_match_value)) {
-                                                                u64 ret_Rvalue = (thread_context.r[m_watch_data.i] + (m_watch_data.two_register ? (thread_context.r[m_watch_data.j] << m_watch_data.k) : 0)) | ((X30_alternative - m_watch_data.main_start) << (64 - 27));
-                                                                bool found = false;
-                                                                if ((m_watch_data.stack_check_count > 0) || m_watch_data.grab_A || m_watch_data.grab_R) {
-                                                                    auto entry = get_from_stack(thread_context,false);
-                                                                    entry.address = ret_Rvalue;
-                                                                    for (int i = 0; i < m_watch_data.count; i++) {
-                                                                        if (memcmp(&(m_watch_data.fromU.from2[i].from_stack), &entry, sizeof(m_from_stack_t)) == 0) {
-                                                                            (m_watch_data.fromU.from2[i].count)++;
-                                                                            found = true;
-                                                                        }
-                                                                    };
-                                                                    if (!found && m_watch_data.count < max_watch_buffer2) {
-                                                                        u64 value = 0;
-                                                                        if (m_watch_data.range_check) {
-                                                                            u64 address = thread_context.r[m_watch_data.i] + m_watch_data.offset;
-                                                                            if (R_FAILED(m_debug_process.ReadMemory(&value, address, m_watch_data.vsize))) {
-                                                                                m_watch_data.failed = 9;
-                                                                            };
-                                                                        }
-                                                                        if (!m_watch_data.range_check || (m_watch_data.v1 <= value && value <= m_watch_data.v2)) {
-                                                                            m_watch_data.fromU.from2[m_watch_data.count].from_stack = entry;
-                                                                            m_watch_data.fromU.from2[m_watch_data.count].count = 1;
-                                                                            m_watch_data.count++;
-                                                                        };
-                                                                    }
+
+                                                                if (m_watch_data.total_trigger < m_watch_data.max_trigger) {
+                                                                    m_watch_data.total_trigger++;
+                                                                    m_watch_data.next_pc = address + 4;
+                                                                    if (R_FAILED(m_debug_process.SetHardwareBreakPoint(m_watch_data.next_pc, 4, false))) {
+                                                                        m_watch_data.failed = 7;
+                                                                    } 
+                                                                    m_debug_process.Continue();
                                                                 } else {
-                                                                    for (int i = 0; i < m_watch_data.count; i++) {
-                                                                        if (m_watch_data.fromU.from[i].address == ret_Rvalue) {
-                                                                            (m_watch_data.fromU.from[i].count)++;
-                                                                            found = true;
-                                                                        }
-                                                                    };
-                                                                    if (!found && m_watch_data.count < max_watch_buffer) {
-                                                                        u64 value = 0;
-                                                                        if (m_watch_data.range_check) {
-                                                                            u64 address = thread_context.r[m_watch_data.i] + m_watch_data.offset;
-                                                                            if (R_FAILED(m_debug_process.ReadMemory(&value, address, m_watch_data.vsize))) {
-                                                                                m_watch_data.failed = 10;
-                                                                            };
-                                                                        }
-                                                                        if (!m_watch_data.range_check || (m_watch_data.v1 <= value && value <= m_watch_data.v2)) {
-                                                                            m_watch_data.fromU.from[m_watch_data.count].address = ret_Rvalue;
-                                                                            m_watch_data.fromU.from[m_watch_data.count].count = 1;
-                                                                            m_watch_data.count++;
-                                                                        };
-                                                                    }
+                                                                    m_debug_process.Continue();
                                                                 }
                                                             }
                                                         }
-
-                                                        if (m_watch_data.total_trigger < m_watch_data.max_trigger) {
-                                                            m_watch_data.total_trigger++;
-                                                            m_watch_data.next_pc = address + 4;
-                                                            if (R_FAILED(m_debug_process.SetHardwareBreakPoint(m_watch_data.next_pc, 4, false))) {
-                                                                m_watch_data.failed = 7;
-                                                            } 
-                                                                m_debug_process.Continue();
-                                                        } else
-                                                            m_debug_process.Continue();
                                                     }
                                                 } else {
                                                     /* memory case*/
@@ -1632,47 +1889,64 @@ namespace ams::dmnt {
                                         const u64 our_lo = util::AlignDown(m_watch_data.address, band);
                                         const u64 our_hi = our_lo + band;
                                         const bool in_band = (m_watch_data.size > 0)
-                                            && (address >= our_lo) && (address < our_hi);
-                                        if (address == m_watch_data.address || in_band || m_watch_data.gen2loop_on == 2) {
+                                            && (address >= our_lo) && (address < our_hi);                                        if (address == m_watch_data.address || in_band || m_watch_data.gen2loop_on == 2) {
                                             m_watch_data.intercepted = true;
                                             /* Clear the watch point */
                                             if (R_SUCCEEDED(m_debug_process.ClearWatchPoint( m_watch_data.address, m_watch_data.size))) {
                                                 /* save the info*/
                                                 svc::ThreadContext thread_context;
                                                 if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(thread_context), thread_id, svc::ThreadContextFlag_All))) {
+                                                    
+                                                    bool is_trigger_bp = false;
+                                                     if (m_watch_data.bp_match_trigger) {
+                                                         if ((thread_context.pc & 0x7FFFFFFFFFULL) == (m_watch_data.bp_match_pc & 0x7FFFFFFFFFULL) &&
+                                                             (thread_context.lr & 0x7FFFFFFFFFULL) == (m_watch_data.bp_match_lr & 0x7FFFFFFFFFULL)) {
+                                                             is_trigger_bp = true;
+                                                         }
+                                                     }
 
-                                                    // u64 ret_pc = thread_context.pc | (thread_context.lr << (64-16));
-                                                    bool found = false;
-                                                    auto entry = get_from_stack(thread_context, true);
-                                                    for (int i = 0; i < m_watch_data.count; i++) {
-                                                        if (memcmp(&(m_watch_data.fromU.from2[i].from_stack), &entry, sizeof(m_from_stack_t)) == 0) {
-                                                            (m_watch_data.fromU.from2[i].count)++;
-                                                            found = true;
+                                                    if (is_trigger_bp) {
+                                                        m_watch_data.bp_hit = true;
+                                                        m_debug_process.SetDebugBreaked();
+                                                        m_watch_data.bp_thread_id = thread_id;
+                                                        m_watch_data.bp_ctx = thread_context;
+                                                        m_watch_data.bp_addr = thread_context.pc;
+                                                        m_watch_data.bp_original_insn = 0;
+                                                    } else if (m_watch_data.bp_match_trigger) {
+                                                        m_watch_data.next_pc = thread_context.pc + 4;
+                                                        if (R_FAILED(m_debug_process.SetHardwareBreakPoint(m_watch_data.next_pc, 4, false))) {
+                                                            m_watch_data.failed = 2;
                                                         }
-                                                    };
-                                                    if (!found && m_watch_data.count < max_watch_buffer2) {
-                                                        m_watch_data.fromU.from2[m_watch_data.count].from_stack = entry;
-                                                        m_watch_data.fromU.from2[m_watch_data.count].count = 1;
-                                                        m_watch_data.count++;
-                                                    };
-                                                    // m_watch_data.fromU.from[thread_context.pc]++;
-                                                    if (m_watch_data.total_trigger < m_watch_data.max_trigger) {
+                                                        m_debug_process.Continue();
+                                                    } else {
+                                                        // Normal watchpoint hit (monitor mode)
+                                                        bool found = false;
+                                                        auto entry = get_from_stack(thread_context, true);
+                                                        for (int i = 0; i < m_watch_data.count; i++) {
+                                                            if (memcmp(&(m_watch_data.fromU.from2[i].from_stack), &entry, sizeof(m_from_stack_t)) == 0) {
+                                                                (m_watch_data.fromU.from2[i].count)++;
+                                                                found = true;
+                                                            }
+                                                        };
+                                                        if (!found && m_watch_data.count < max_watch_buffer2) {
+                                                            m_watch_data.fromU.from2[m_watch_data.count].from_stack = entry;
+                                                            m_watch_data.fromU.from2[m_watch_data.count].count = 1;
+                                                            m_watch_data.count++;
+                                                        };
+                                                        if (m_watch_data.total_trigger < m_watch_data.max_trigger) {
                                                             m_watch_data.total_trigger++;
-                                                    m_watch_data.next_pc = thread_context.pc + 4;
-                                                    // if (m_watch_data.count < m_watch_data.max_count) {
-                                                    //     m_watch_data.from.push_back(thread_context.pc);
-                                                    //     m_watch_data.next_pc = thread_context.pc + 4;
-                                                    if (R_FAILED(m_debug_process.SetHardwareBreakPoint(m_watch_data.next_pc, 4, false))) {
-                                                        m_watch_data.failed = 2;
-                                                    };
+                                                            m_watch_data.next_pc = thread_context.pc + 4;
+                                                            if (R_FAILED(m_debug_process.SetHardwareBreakPoint(m_watch_data.next_pc, 4, false))) {
+                                                                m_watch_data.failed = 2;
+                                                            };
+                                                        }
+                                                        m_debug_process.Continue();
                                                     }
-                                                    // };
-                                                    m_debug_process.Continue();//thread_id);
                                                 } else
                                                     m_watch_data.failed = 1;
                                             } else {
                                                 m_watch_data.failed = 3;
-                                            };
+                                            };;
                                         } else {
                                             /* Hardware data watchpoint that doesn't match the
                                              * gen2 watch band. Same shape as the instruction-BP

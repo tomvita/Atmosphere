@@ -33,6 +33,14 @@ namespace ams::dmnt {
             SoftwareBreakPoint m_breakpoints[BreakPointCountMax];
         public:
             explicit SoftwareBreakPointManager(DebugProcess *debug_process);
+            u32 GetOriginalInstruction(uintptr_t address) {
+                for (size_t i = 0; i < BreakPointCountMax; ++i) {
+                    if (m_breakpoints[i].m_in_use && m_breakpoints[i].m_address == address) {
+                        return m_breakpoints[i].m_insn;
+                    }
+                }
+                return 0;
+            }
         private:
             virtual BreakPointBase *GetBreakPoint(size_t index) override;
     };

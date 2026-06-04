@@ -50,6 +50,11 @@ namespace ams::dmnt {
             u64 m_gen2_watch_size{0};
             bool m_gen2_watch_read{false};
             bool m_gen2_watch_write{false};
+            u64 m_step_original_pc{0};
+            bool m_step_pending{false};
+            bool m_watchpoint_rearm_pending{false};
+            bool m_instruction_rearm_pending{false};
+            bool m_continue_after_step{false};
         public:
             GdbServerImpl(int socket, void *thread_stack, size_t stack_size);
             ~GdbServerImpl();

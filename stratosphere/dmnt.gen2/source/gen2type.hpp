@@ -46,7 +46,12 @@
             ATTACH,
             ATTACH_CONT,
             CONT,
-            INCPC
+            INCPC,
+            SETB,
+            CLEARB,
+            STEP,
+            STEPOVER,
+            SETREGS
         };
         enum x30_catch_type_t {
             OFFSET,
@@ -102,4 +107,12 @@
             bool grab_R = false;
             u8 Register = 14;
             u64 Register_match_value = 0;
+            bool bp_hit = false;
+            u64 bp_addr = 0;
+            u64 bp_thread_id = 0;
+            ams::svc::ThreadContext bp_ctx{};
+            bool bp_match_trigger = false;
+            u64 bp_match_pc = 0;
+            u64 bp_match_lr = 0;
+            u32 bp_original_insn = 0;
         } m_watch_data_t;

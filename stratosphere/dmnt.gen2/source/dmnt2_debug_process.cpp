@@ -70,6 +70,10 @@ namespace ams::dmnt {
             m_hardware_breakpoints.ClearAll();
             m_hardware_watchpoints.ClearAll();
 
+            if (m_status == ProcessStatus_DebugBreak) {
+                this->Continue();
+            }
+
             dmnt::dbg::DetachGen2();
             m_debug_handle = svc::InvalidHandle;
         }

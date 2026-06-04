@@ -41,6 +41,7 @@ namespace ams::dmnt {
             void ClearAll();
             void Reset();
 
+            bool HasBreakPoint(uintptr_t address);
             Result ClearBreakPoint(uintptr_t address, size_t size);
         protected:
             virtual BreakPointBase *GetBreakPoint(size_t index) = 0;
