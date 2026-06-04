@@ -1,7 +1,7 @@
 #define max_watch_buffer 0x200
 #define max_call_stack 5
 #define stack_check_size 100
-#define GEN2_VERSION "v0.14"
+#define GEN2_VERSION "v0.15"
         typedef struct {
             u64 address:64;
             u32 count:32;
