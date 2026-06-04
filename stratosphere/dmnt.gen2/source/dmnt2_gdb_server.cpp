@@ -83,6 +83,7 @@ namespace ams::dmnt {
                 }
 
                 /* Listen on our port. */
+                bool accept_failed = false;
                 while (transport::Listen(fd, 0) == 0) {
                     /* Continue accepting clients, so long as we can. */
                     int client_fd;
@@ -134,6 +135,7 @@ namespace ams::dmnt {
                         }
 
                         if (temp_fd < 0) {
+                            accept_failed = true;
                             break;
                         }
                         client_fd = temp_fd;
@@ -157,6 +159,9 @@ namespace ams::dmnt {
 
                         /* Close the client socket. */
                         transport::Close(client_fd);
+                    }
+                    if (accept_failed) {
+                        break;
                     }
                 }
             }

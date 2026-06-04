@@ -111,6 +111,10 @@ namespace ams::dmnt {
                 /* Write the data to our buffer. */
                 m_receive_buffer.WaitToBeWritable();
                 m_receive_buffer.Write(buffer, res);
+            } else if (res == 0) {
+                /* EOF: Connection closed by peer. */
+                m_valid = false;
+                break;
             } else {
                 /* Otherwise, if we got an error other than "try again", we're done. */
                 if (!transport::IsLastErrorEAgain()) {
