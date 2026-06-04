@@ -1840,6 +1840,7 @@ namespace ams::dmnt {
                                              */
                                             m_watch_data.intercepted = false;
                                             if (!m_session.IsValid()) {
+                                                m_debug_process.ClearHardwareBreakPoint(address, 4);
                                                 m_debug_process.Continue();
                                             } else {
                                                 AppendReplyFormat(reply_cur, reply_end, "T%02Xthread:p%lx.%lx;hwbreak:;", static_cast<u32>(signal), m_process_id.value, thread_id);
@@ -1958,6 +1959,7 @@ namespace ams::dmnt {
                                              */
                                             m_watch_data.intercepted = false;
                                             if (!m_session.IsValid()) {
+                                                m_debug_process.ClearWatchPoint(address, 4);
                                                 m_debug_process.Continue();
                                             } else {
                                                 AppendReplyFormat(reply_cur, reply_end, "T%02Xthread:p%lx.%lx;%s:%lx;", static_cast<u32>(signal), m_process_id.value, thread_id, type, address);
@@ -3296,6 +3298,7 @@ namespace ams::dmnt {
             }
             m_watch_data.intercepted = false;
         } else if (ParsePrefix(command, "clearw")) {
+            std::scoped_lock lk(g_watch_data_lock);
             clearw();
         } else if (ParsePrefix(command, "seti ")) {
             /* Decode i. */
@@ -3310,21 +3313,27 @@ namespace ams::dmnt {
                 AppendReplyFormat(reply_cur, reply_end, "Not attached.\n");
                 return;
             }
-            m_watch_data.next_read = false;
-            m_watch_data.next_write = false;
-            if (ParsePrefix(command, "r") || ParsePrefix(command, "R")) m_watch_data.next_read = true;
-            if (ParsePrefix(command, "w") || ParsePrefix(command, "W")) m_watch_data.next_write = true;
+            bool next_read = false;
+            bool next_write = false;
+            if (ParsePrefix(command, "r") || ParsePrefix(command, "R")) next_read = true;
+            if (ParsePrefix(command, "w") || ParsePrefix(command, "W")) next_write = true;
 
             /* Allow optional "0x" prefix. */
             ParsePrefix(command, "0x");
 
             /* Decode address. */
-            m_watch_data.next_address = DecodeHex(command);
-            clearw();
-            m_watch_data.address = m_watch_data.next_address;
-            m_watch_data.read = m_watch_data.next_read;
-            m_watch_data.write = m_watch_data.next_write;
-            setw();
+            u64 next_address = DecodeHex(command);
+            {
+                std::scoped_lock lk(g_watch_data_lock);
+                m_watch_data.next_read = next_read;
+                m_watch_data.next_write = next_write;
+                m_watch_data.next_address = next_address;
+                clearw();
+                m_watch_data.address = m_watch_data.next_address;
+                m_watch_data.read = m_watch_data.next_read;
+                m_watch_data.write = m_watch_data.next_write;
+                setw();
+            }
 
         } else if (ParsePrefix(command, "get mapping ")) {
             if (!this->HasDebugProcess()) {

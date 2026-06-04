@@ -53,7 +53,7 @@ namespace ams::dmnt {
     Result BreakPointManagerBase::ClearBreakPoint(uintptr_t address, size_t size) {
         BreakPointBase *bp = nullptr;
         for (size_t i = 0; (bp = static_cast<BreakPointBase *>(this->GetBreakPoint(i))) != nullptr; ++i) {
-            if (bp->m_in_use && bp->m_address == address) {
+            if (bp->m_in_use && (bp->m_address == address || (bp->m_address <= address && address < bp->m_address + bp->m_size))) {
                 /* Historical note: this used to assert that bp->m_size == size,
                  * but the fork commented out the AMS_ABORT_UNLESS and left a
                  * dead `if (bp->m_size == size){}` placeholder. The size
