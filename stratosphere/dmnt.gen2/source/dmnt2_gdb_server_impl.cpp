@@ -19,6 +19,7 @@
 #endif
 #include "dmnt2_debug_log.hpp"
 #include "dmnt2_gdb_server_impl.hpp"
+#include "dmnt2_shared_debug_handle.hpp"
 
 namespace ams::dmnt {
 
@@ -3561,6 +3562,23 @@ namespace ams::dmnt {
 
             /* If doing a fresh read, generate the process list. */
             if (offset == 0 || g_annex_buffer_contents != AnnexBufferContents_Processes) {
+                /* If GDB is not yet attached, but cheats are, close the cheats debug handle. */
+                os::ProcessId cheat_process_id = os::InvalidProcessId;
+                char cheat_process_name[12] = "";
+                if (offset == 0 && !m_debug_process.IsValid()) {
+                    cheat_process_id = dmnt::dbg::GetSharedProcessId();
+                    if (cheat_process_id != os::InvalidProcessId) {
+                        dmnt::dbg::GetSharedProcessName(cheat_process_name);
+                        if (cheat_process_name[0] == '\0') {
+                            std::strncpy(cheat_process_name, "Application", sizeof(cheat_process_name));
+                        }
+#if !defined(DMNT_GEN2_NO_CHEATVM)
+                        ams::dmnt::cheat::impl::ForceCloseCheatProcess();
+#endif
+                        os::SleepThread(ams::TimeSpan::FromMilliSeconds(100));
+                    }
+                }
+
                 /* Prepare to write to annex buffer. */
                 char *dst_cur = g_annex_buffer;
                 char *dst_end = g_annex_buffer + sizeof(g_annex_buffer);
@@ -3582,6 +3600,16 @@ namespace ams::dmnt {
 
                     /* Send all processes. */
                     for (s32 i = 0; i < num_process_ids; ++i) {
+                        if (process_ids[i] == dmnt::dbg::GetSharedProcessId().value) {
+                            char name[12] = "";
+                            dmnt::dbg::GetSharedProcessName(name);
+                            if (name[0] == '\0') {
+                                std::strncpy(name, "Application", sizeof(name));
+                            }
+                            AppendReplyFormat(dst_cur, dst_end, "<item>\n<column name=\"pid\">%lu</column>\n<column name=\"command\">%s</column>\n</item>\n", process_ids[i], name);
+                            continue;
+                        }
+
                         svc::Handle handle;
                         if (R_SUCCEEDED(svc::DebugActiveProcess(std::addressof(handle), process_ids[i]))) {
                             ON_SCOPE_EXIT { static_cast<void>(svc::CloseHandle(handle)); };
@@ -3593,6 +3621,9 @@ namespace ams::dmnt {
                             }
 
                             AppendReplyFormat(dst_cur, dst_end, "<item>\n<column name=\"pid\">%lu</column>\n<column name=\"command\">%s</column>\n</item>\n", d.info.create_process.process_id, d.info.create_process.name);
+                        } else if (process_ids[i] == cheat_process_id.value) {
+                            /* Fallback if the kernel is still detaching. */
+                            AppendReplyFormat(dst_cur, dst_end, "<item>\n<column name=\"pid\">%lu</column>\n<column name=\"command\">%s</column>\n</item>\n", process_ids[i], cheat_process_name);
                         }
                     }
                 }

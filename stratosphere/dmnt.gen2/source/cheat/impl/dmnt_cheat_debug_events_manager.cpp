@@ -15,6 +15,7 @@
  */
 #include <stratosphere.hpp>
 #include "dmnt_cheat_debug_events_manager.hpp"
+#include "../../dmnt2_shared_debug_handle.hpp"
 
 /* WORKAROUND: This design prevents a kernel deadlock from occurring on 6.0.0+ */
 
@@ -131,6 +132,9 @@ namespace ams::dmnt::cheat::impl {
                     svc::DebugEventInfo d;
                     size_t target_core = NumCores - 1;
                     while (R_SUCCEEDED(svc::GetDebugEvent(std::addressof(d), cheat_dbg_hnd))) {
+                        if (d.type == svc::DebugEvent_CreateProcess) {
+                            dmnt::dbg::SetSharedProcessName(d.info.create_process.name);
+                        }
                         if (d.type == svc::DebugEvent_CreateThread) {
                             R_TRY(GetTargetCore(std::addressof(target_core), d, cheat_dbg_hnd));
                         }

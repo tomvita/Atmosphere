@@ -30,12 +30,22 @@ namespace ams::dmnt {
     }
 
     Result DebugProcess::Attach(os::ProcessId process_id, bool start_process) {
-        /* Determine if it's already attached (shared). */
-        const bool shared = (dmnt::dbg::GetSharedDebugHandle() != os::InvalidNativeHandle);
+#if !defined(DMNT_GEN2_NO_CHEATVM)
+        /* Cleanly detach the cheat process if it was attached. */
+        if (dmnt::dbg::GetSharedDebugHandle() != os::InvalidNativeHandle) {
+            ams::dmnt::cheat::impl::ForceCloseCheatProcess();
+            /* Sleep briefly to allow the kernel asynchronously to detach. */
+            os::SleepThread(ams::TimeSpan::FromMilliSeconds(100));
+        }
+#endif
 
         /* Attach Gen2. */
         R_TRY(dmnt::dbg::AttachGen2(process_id));
         m_debug_handle = dmnt::dbg::GetSharedDebugHandle();
+
+#if !defined(DMNT_GEN2_NO_CHEATVM)
+        ams::dmnt::cheat::impl::SuspendDebugEvents(true);
+#endif
 
         /* If necessary, start the process. */
         if (start_process) {
@@ -43,11 +53,7 @@ namespace ams::dmnt {
         }
 
         /* Collect initial information. */
-        if (shared) {
-            R_TRY(this->StartShared(process_id));
-        } else {
-            R_TRY(this->Start());
-        }
+        R_TRY(this->Start());
 
         /* Get the attached modules. */
         R_TRY(this->CollectModules());
@@ -76,6 +82,10 @@ namespace ams::dmnt {
 
             dmnt::dbg::DetachGen2();
             m_debug_handle = svc::InvalidHandle;
+
+#if !defined(DMNT_GEN2_NO_CHEATVM)
+            ams::dmnt::cheat::impl::SuspendDebugEvents(false);
+#endif
         }
 
         m_is_valid = false;
@@ -201,6 +211,8 @@ namespace ams::dmnt {
                 }
             }
         }
+
+
 
         /* Set ourselves as valid. */
         m_is_valid = true;

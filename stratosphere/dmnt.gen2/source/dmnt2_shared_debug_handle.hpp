@@ -10,5 +10,9 @@ namespace ams::dmnt::dbg {
     void DetachGen2();
 
     os::NativeHandle GetSharedDebugHandle();
+    os::ProcessId GetSharedProcessId();
+    void SetSharedProcessName(const char *name);
+    void GetSharedProcessName(char *out_name);
 
 }
+
