@@ -1577,6 +1577,31 @@ namespace ams::dmnt {
         u64 new_hb_nro_addr = 0;
         u32 new_hb_nro_insn = 0;
 
+        auto CheckRateLimitAndSleep = []() {
+            static os::Tick s_period_start;
+            static bool s_initialized = false;
+            static u32 s_event_count = 0;
+
+            os::Tick now = os::GetSystemTick();
+            if (!s_initialized) {
+                s_period_start = now;
+                s_initialized = true;
+            }
+
+            const auto elapsed = os::ConvertToTimeSpan(now - s_period_start);
+            if (elapsed < TimeSpan::FromMilliSeconds(1)) {
+                s_event_count++;
+                if (s_event_count > 10) {
+                    os::SleepThread(TimeSpan::FromMilliSeconds(1));
+                    s_period_start = os::GetSystemTick();
+                    s_event_count = 0;
+                }
+            } else {
+                s_period_start = now;
+                s_event_count = 1;
+            }
+        };
+
         while (true) {
             /* Wait for an event to come in. */
             const Result wait_result = [&] ALWAYS_INLINE_LAMBDA {
@@ -1624,7 +1649,7 @@ namespace ams::dmnt {
                                      * (intercepted/next_pc/failed/fromU/count/total_trigger).
                                      * Lock against the gen2_loop poll thread and the
                                      * dmnt:cht IPC handlers for the duration. See Opt 3. */
-                                    std::scoped_lock _wd_lk(g_watch_data_lock);
+                                    std::unique_lock _wd_lk(g_watch_data_lock);
 
                                     signal = GdbSignal_BreakpointTrap;
                                     const uintptr_t address = d.info.exception.address;
@@ -1696,6 +1721,8 @@ namespace ams::dmnt {
                                                                 if (R_FAILED(m_debug_process.SetHardwareBreakPoint(m_watch_data.next_pc, 4, false))) {
                                                                     m_watch_data.failed = 7;
                                                                 }
+                                                                _wd_lk.unlock();
+                                                                CheckRateLimitAndSleep();
                                                                 m_debug_process.Continue();
                                                             } else {
                                                                 u64 X30_alternative;
@@ -1800,6 +1827,8 @@ namespace ams::dmnt {
                                                                     if (R_FAILED(m_debug_process.SetHardwareBreakPoint(m_watch_data.next_pc, 4, false))) {
                                                                         m_watch_data.failed = 7;
                                                                     } 
+                                                                    _wd_lk.unlock();
+                                                                    CheckRateLimitAndSleep();
                                                                     m_debug_process.Continue();
                                                                 } else {
                                                                     m_debug_process.Continue();
@@ -1919,6 +1948,8 @@ namespace ams::dmnt {
                                                         if (R_FAILED(m_debug_process.SetHardwareBreakPoint(m_watch_data.next_pc, 4, false))) {
                                                             m_watch_data.failed = 2;
                                                         }
+                                                        _wd_lk.unlock();
+                                                        CheckRateLimitAndSleep();
                                                         m_debug_process.Continue();
                                                     } else {
                                                         // Normal watchpoint hit (monitor mode)
@@ -1941,8 +1972,12 @@ namespace ams::dmnt {
                                                             if (R_FAILED(m_debug_process.SetHardwareBreakPoint(m_watch_data.next_pc, 4, false))) {
                                                                 m_watch_data.failed = 2;
                                                             };
+                                                            _wd_lk.unlock();
+                                                            CheckRateLimitAndSleep();
+                                                            m_debug_process.Continue();
+                                                        } else {
+                                                            m_debug_process.Continue();
                                                         }
-                                                        m_debug_process.Continue();
                                                     }
                                                 } else
                                                     m_watch_data.failed = 1;
