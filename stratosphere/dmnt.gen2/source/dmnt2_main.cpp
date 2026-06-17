@@ -209,4 +209,10 @@ namespace ams {
         LoopProcessIpcServer();
     }
 
+    namespace hos {
+        bool IsUnitTestProgramForSetVersion() {
+            return true;
+        }
+    }
+
 }
