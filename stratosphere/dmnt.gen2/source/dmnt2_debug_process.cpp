@@ -71,10 +71,11 @@ namespace ams::dmnt {
     }
 
     void DebugProcess::Detach() {
+        m_hardware_breakpoints.ClearAll();
+        m_hardware_watchpoints.ClearAll();
+
         if (m_is_valid) {
             m_software_breakpoints.ClearAll();
-            m_hardware_breakpoints.ClearAll();
-            m_hardware_watchpoints.ClearAll();
 
             if (m_status == ProcessStatus_DebugBreak) {
                 this->Continue();

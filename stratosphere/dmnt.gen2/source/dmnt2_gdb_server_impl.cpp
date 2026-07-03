@@ -152,13 +152,23 @@ namespace ams::dmnt {
                 case DETACH: {
                     std::scoped_lock lk(g_watch_data_lock);
                     clearw();
-                    m_watch_data.bp_hit = false;
-                    m_watch_data.bp_thread_id = 0;
-                    m_watch_data.bp_original_insn = 0;
+
+                    m_step_pending = false;
+                    m_watchpoint_rearm_pending = false;
+                    m_instruction_rearm_pending = false;
+                    m_continue_after_step = false;
+                    m_gen2_watch_active = false;
+
                     m_debug_process.Detach();
+
 #if !defined(DMNT_GEN2_NO_CHEATVM)
                     dmnt::cheat::impl::SuspendDebugEvents(false);
 #endif
+
+                    m_watch_data.next_pc = 0x55AA55AA;
+                    m_watch_data.bp_hit = false;
+                    m_watch_data.intercepted = false;
+                    m_watch_data.attached = false;
                     m_watch_data.attach_success = false;
                     break;
                 }
@@ -3161,7 +3171,7 @@ namespace ams::dmnt {
                                                "gen2\n"
                                                "attach\n"
                                                "detach\n"
-                                               "Tomvita fork " GEN2_VERSION " address = %010lx\n",(long unsigned int)&(m_watch_data.execute));
+                                               "Tomvita fork " GEN2_VERSION "a address = %010lx\n",(long unsigned int)&(m_watch_data.execute));
         } else if (ParsePrefix(command, "get base") || ParsePrefix(command, "get info") || ParsePrefix(command, "get modules")) {
             if (!this->HasDebugProcess()) {
                 AppendReplyFormat(reply_cur, reply_end, "Not attached.\n");
