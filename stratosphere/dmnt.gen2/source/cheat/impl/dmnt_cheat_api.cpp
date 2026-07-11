@@ -419,7 +419,7 @@ namespace ams::dmnt::cheat::impl {
 #define BP_address proc_addr & 0xFFFFFFFFFF
 #define BP_Token proc_addr >> 56  
 
-                    if (BP_Token!=0) {
+                    if (BP_Token != 0 && size >= sizeof(DmntBreakpointResult)) {
                         BP_Result.address = BP_address;
                         sprintf(BP_Result.name, "Good Work Token=%lx",BP_Token);
                         R_SUCCEED();
