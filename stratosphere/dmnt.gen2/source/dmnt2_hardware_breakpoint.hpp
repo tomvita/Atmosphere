@@ -19,6 +19,25 @@
 
 namespace ams::dmnt {
 
+    /* One recorded debug-register write, surfaced by `monitor dbgregs`.
+     * The ARM debug registers are per-core and the kernel neither saves nor
+     * restores them, so this is the only way to tell a watchpoint that was
+     * overwritten from one whose write never reached the core that mattered.
+     * See WATCHPOINT_BUG.md. */
+    struct DebugRegisterTraceEntry {
+        u64 tick;
+        u64 dbgbcr;
+        u64 value;
+        u32 reg;
+        u32 result;
+        s16 requested_core;
+        s16 observed_core;
+        u16 migrate_spins;
+        u16 reserved;
+    };
+
+    constexpr size_t DebugRegisterTraceCount = 64;
+
     struct HardwareBreakPoint : public BreakPoint {
         svc::HardwareBreakPointRegisterName m_reg;
         svc::HardwareBreakPointRegisterName m_ctx;
@@ -42,6 +61,17 @@ namespace ams::dmnt {
             static Result SetContextBreakPoint(svc::HardwareBreakPointRegisterName ctx, DebugProcess *debug_process);
             static svc::HardwareBreakPointRegisterName GetWatchPointContextRegister();
             static Result SetExecutionBreakPoint(svc::HardwareBreakPointRegisterName reg, svc::HardwareBreakPointRegisterName ctx, u64 address);
+
+            /* Number of execution-breakpoint slots we may actually hand out:
+             * the registers below the reserved context-aware comparators. */
+            static size_t GetUsableBreakPointCount();
+
+            /* Copy trace entry `index` (oldest first) into `out`; returns the
+             * number of entries available, or 0 if `index` is past the end.
+             * `out_total` receives the lifetime write count. */
+            static size_t GetDebugRegisterTrace(size_t index, DebugRegisterTraceEntry *out, u64 *out_total);
+
+            static void GetRegisterExtents(int *out_last_bp, int *out_first_ctx, int *out_last_ctx, int *out_last_wp);
         public:
             explicit HardwareBreakPointManager(DebugProcess *debug_process);
         private:

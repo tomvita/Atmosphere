@@ -23,6 +23,12 @@ namespace ams::dmnt::cheat::impl {
     os::NativeHandle GetSharedDebugHandle();
     void SuspendDebugEvents(bool suspend);
 
+    /* Block until the cheat engine's debug-events thread is definitely not
+     * holding a debug event on the shared handle. Call after
+     * SuspendDebugEvents(true) before taking over event handling.
+     * Returns false on timeout. */
+    bool WaitDebugEventsParked(TimeSpan timeout);
+
     bool GetHasActiveCheatProcess();
     os::NativeHandle GetCheatProcessEventHandle();
     Result GetCheatProcessMetadata(CheatProcessMetadata *out);

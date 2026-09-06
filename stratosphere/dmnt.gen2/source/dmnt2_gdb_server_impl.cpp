@@ -1307,6 +1307,23 @@ namespace ams::dmnt {
         /* Reset pending in case the worker hasn't picked it up
          * (e.g. on timeout) so a future request isn't double-consumed. */
         g_attach_request_pending = false;
+
+#if !defined(DMNT_GEN2_NO_CHEATVM)
+        /* If we did not end up attached -- the worker failed, or we timed out
+         * before it ran at all -- undo the suspend we latched on entry.
+         *
+         * DebugProcess::Attach() has its own guard, but it only covers the
+         * case where the worker actually reached Attach(). The 2 s timeout
+         * path never does, and a latched suspend leaves the cheat engine's
+         * events thread parked: any later ForceOpenCheatProcess() re-attaches
+         * with svcDebugActiveProcess and nothing ever continues the game.
+         * This is the "Unable to attach to game, you may need to toggle sleep"
+         * path in Breeze's gen2 menu. */
+        if (!m_debug_process.IsValid()) {
+            dmnt::cheat::impl::SuspendDebugEvents(false);
+            dmnt::cheat::impl::ForceOpenCheatProcess();
+        }
+#endif
     }
     GdbServerImpl::GdbServerImpl(int socket, void *stack, size_t stack_size) : m_socket(socket), m_session(socket), m_packet_io(), m_state(State::Initial), m_debug_process(), m_event(os::EventClearMode_AutoClear) {
         /* Create and start the events thread. */
@@ -1320,9 +1337,6 @@ namespace ams::dmnt {
     GdbServerImpl::~GdbServerImpl() {
         /* Set ourselves as killed. */
         m_killed = true;
-#if !defined(DMNT_GEN2_NO_CHEATVM)
-        dmnt::cheat::impl::SuspendDebugEvents(false);
-#endif
 
         /* Wake the events thread so it observes m_killed and exits
          * its predicate-loop. Must signal under g_event_lock (the
@@ -1348,6 +1362,24 @@ namespace ams::dmnt {
         if (this->HasDebugProcess()) {
             m_debug_process.Detach();
         }
+
+#if !defined(DMNT_GEN2_NO_CHEATVM)
+        /* Un-park the cheat engine's events thread only now that we are done
+         * with the debug handle.
+         *
+         * This used to run at the very top of the destructor, which meant that
+         * for the whole teardown - joining the events thread, clearing
+         * breakpoints, the Continue() inside Detach() - both we and the cheat
+         * events thread owned the same shared handle and could race for the
+         * same debug event. Harmless in outcome (the process ends up running
+         * either way) but it is exactly the double-ownership the parked
+         * acknowledgement exists to prevent.
+         *
+         * Detach() already does this when it had a valid process; repeating it
+         * is free and covers the case where it did not (a Gen2Attach that
+         * latched the suspend and then failed). */
+        dmnt::cheat::impl::SuspendDebugEvents(false);
+#endif
     }
 
     void GdbServerImpl::DebugEventsThread() {
@@ -1907,33 +1939,57 @@ namespace ams::dmnt {
                                             AMS_DMNT2_GDB_LOG_DEBUG("GetWatchPointInfo FAIL %lx, addr=%lx, type=%s\n", thread_id, address, is_instr ? "Instr" : "Data");
                                         }
 
-                                        /* Claim the hit as the gen2 watch using a fuzzy
-                                         * address-band match.  ARMv8 watchpoint hardware
-                                         * can report a fault address that differs from
-                                         * the configured base by up to the BAS / mask
-                                         * coverage of the watch - typically less than 32
-                                         * bytes for small watches.
+                                        /* Decide whether this hit belongs to the gen2
+                                         * capture engine or to a GDB client's Z2/Z3/Z4.
                                          *
-                                         * The historical band was a fixed 32 bytes which
-                                         * silently swallowed unrelated GDB Z2/Z3/Z4
-                                         * watches falling within that band (see design
-                                         * doc Bug 2). We now use max(32, watch_size) so
-                                         * larger range watches still match while smaller
-                                         * unrelated watches outside ~32 B are correctly
-                                         * passed through to the GDB client.
+                                         * Ownership comes from m_gen2_watch_*, NOT from
+                                         * m_watch_data. m_watch_data is a file-scope global
+                                         * that outlives the session and that any dmnt:cht
+                                         * client can overwrite at any moment, so a stale
+                                         * address left there by an earlier Breeze capture
+                                         * used to let gen2 claim - and silently clear - a
+                                         * watchpoint a GDB client had just armed nearby.
+                                         * That failure is invisible from the client side:
+                                         * the watchpoint simply never fires again. The
+                                         * m_gen2_watch_* shadow fields are GdbServerImpl
+                                         * members written only by setw() and cleared only
+                                         * by clearw(), so they mean "the gen2 side of THIS
+                                         * session has a watch armed" and nothing else.
+                                         * See WATCHPOINT_BUG.md, Finding A.
                                          *
-                                         * The gen2loop_on == 2 raw-mode override is
-                                         * preserved: when no GDB session is connected,
-                                         * any WP hit must be a gen2 one by elimination.
+                                         * The address band stays fuzzy on purpose: ARMv8
+                                         * reports a fault address within the region the
+                                         * access touched, which for a wide access (STP,
+                                         * ST4) can fall outside the watched qword. But it
+                                         * is now only consulted once we already know gen2
+                                         * owns a watch.
+                                         *
+                                         * Raw mode (no GDB session) is read from
+                                         * m_session directly rather than from
+                                         * m_watch_data.gen2loop_on, which is only
+                                         * refreshed by gen2_loop's 500 ms tick and so can
+                                         * still read 2 for up to half a second after a
+                                         * client connects - long enough to claim a hit
+                                         * that belongs to GDB.
+                                         *
+                                         * On ambiguity, favour the GDB client. Guessing
+                                         * gen2 wrongly clears the watchpoint and sends no
+                                         * stop reply, which is silent and expensive;
+                                         * guessing GDB wrongly sends a spurious stop reply,
+                                         * which is visible and harmless.
                                          */
-                                        const u64 band = std::max<u64>(32, m_watch_data.size);
-                                        const u64 our_lo = util::AlignDown(m_watch_data.address, band);
+                                        const u64 band = std::max<u64>(32, m_gen2_watch_size);
+                                        const u64 our_lo = util::AlignDown(m_gen2_watch_address, band);
                                         const u64 our_hi = our_lo + band;
-                                        const bool in_band = (m_watch_data.size > 0)
-                                            && (address >= our_lo) && (address < our_hi);                                        if (address == m_watch_data.address || in_band || m_watch_data.gen2loop_on == 2) {
+                                        const bool in_band = (m_gen2_watch_size > 0)
+                                            && (address >= our_lo) && (address < our_hi);
+                                        const bool gen2_owns = m_gen2_watch_active
+                                            && (address == m_gen2_watch_address || in_band || !m_session.IsValid());
+
+                                        if (gen2_owns) {
                                             m_watch_data.intercepted = true;
                                             /* Clear the watch point */
-                                            if (R_SUCCEEDED(m_debug_process.ClearWatchPoint( m_watch_data.address, m_watch_data.size))) {
+                                            if (R_SUCCEEDED(m_debug_process.ClearWatchPoint(m_gen2_watch_address, m_gen2_watch_size))) {
                                                 /* save the info*/
                                                 svc::ThreadContext thread_context;
                                                 if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(thread_context), thread_id, svc::ThreadContextFlag_All))) {
@@ -2810,7 +2866,15 @@ namespace ams::dmnt {
                     g_attach_request_pending = false;
                 }
 
-                /* If we're attached, send a stop reply packet. */
+                /* If we're attached, send a stop reply packet.
+                 *
+                 * No Break() here: DebugProcess::StartShared() halts the
+                 * process and consumes the DebuggerBreak event itself, so by
+                 * now we are genuinely stopped. Breaking from this side instead
+                 * raced the reply (GetThreadContext on a still-running process)
+                 * and let the event escape to ProcessDebugEvents, which
+                 * answered it with a second asynchronous stop reply on top of
+                 * this one. */
                 if (m_debug_process.IsValid()) {
                     /* Set the stop reply packet. */
                     this->AppendStopReplyPacket(m_debug_process.GetLastSignal());
@@ -3167,6 +3231,7 @@ namespace ams::dmnt {
                                                "seti\n"
                                                "getw\n"
                                                "clearw\n"
+                                               "dbgregs\n"
                                                "cont\n"
                                                "gen2\n"
                                                "attach\n"
@@ -3343,6 +3408,52 @@ namespace ams::dmnt {
                 }
             }
             m_watch_data.intercepted = false;
+        } else if (ParsePrefix(command, "dbgregs")) {
+            /* Dump the debug-register write trace.
+             *
+             * The ARM debug registers are per-core and the kernel neither
+             * saves nor restores them, so a watchpoint that silently stops
+             * firing has exactly two possible explanations, and this tells
+             * them apart:
+             *
+             *   - `want`/`on` differ on some row: the write never reached that
+             *     core, so that core never had the watchpoint at all.
+             *   - a row appears *after* your arm, writing the same D register
+             *     or the I register your watchpoint is linked to (`ctx`
+             *     below): something overwrote it.
+             *
+             * If there are no rows after your arm at all, nothing in dmnt
+             * touched the registers and the cause is below us.
+             * See WATCHPOINT_BUG.md. */
+            int last_bp = -1, first_ctx = -1, last_ctx = -1, last_wp = -1;
+            HardwareBreakPointManager::GetRegisterExtents(std::addressof(last_bp), std::addressof(first_ctx), std::addressof(last_ctx), std::addressof(last_wp));
+
+            AppendReplyFormat(reply_cur, reply_end, "registers: bp I0-I%d, ctx I%d-I%d, wp D0-D%d\n", last_bp, first_ctx, last_ctx, last_wp);
+            AppendReplyFormat(reply_cur, reply_end, "usable:    %zu execution bp, %zu watchpoints\n",
+                              HardwareBreakPointManager::GetUsableBreakPointCount(),
+                              HardwareWatchPointManager::GetUsableWatchPointCount());
+            AppendReplyFormat(reply_cur, reply_end, "exec ctx = I%d, watch ctx = I%d\n", first_ctx, first_ctx + 1);
+            AppendReplyFormat(reply_cur, reply_end, "now = 0x%016lx\n", os::GetSystemTick().GetInt64Value());
+
+            u64 total = 0;
+            DebugRegisterTraceEntry entry;
+            const size_t count = HardwareBreakPointManager::GetDebugRegisterTrace(0, std::addressof(entry), std::addressof(total));
+
+            AppendReplyFormat(reply_cur, reply_end, "writes = %lu (showing last %zu)\n", total, count);
+
+            for (size_t i = 0; i < count; ++i) {
+                if (HardwareBreakPointManager::GetDebugRegisterTrace(i, std::addressof(entry), nullptr) == 0) {
+                    break;
+                }
+
+                const bool is_wp = entry.reg >= static_cast<u32>(svc::HardwareBreakPointRegisterName_D0);
+                const u32 reg_ix = is_wp ? (entry.reg - static_cast<u32>(svc::HardwareBreakPointRegisterName_D0)) : entry.reg;
+
+                AppendReplyFormat(reply_cur, reply_end, "%s t=0x%016lx want=%d on=%d spins=%u %c%u ctl=0x%08lx val=0x%010lx rc=0x%08x\n",
+                                  (entry.requested_core != entry.observed_core) ? "MISS" : "    ",
+                                  entry.tick, entry.requested_core, entry.observed_core, entry.migrate_spins,
+                                  is_wp ? 'D' : 'I', reg_ix, entry.dbgbcr, entry.value, entry.result);
+            }
         } else if (ParsePrefix(command, "clearw")) {
             std::scoped_lock lk(g_watch_data_lock);
             clearw();
@@ -3607,7 +3718,7 @@ namespace ams::dmnt {
 
             /* If doing a fresh read, generate the process list. */
             if (offset == 0 || g_annex_buffer_contents != AnnexBufferContents_Processes) {
-                /* If GDB is not yet attached, but cheats are, close the cheats debug handle. */
+                /* If GDB is not yet attached, note the cheat process so it appears in the list. */
                 os::ProcessId cheat_process_id = os::InvalidProcessId;
                 char cheat_process_name[12] = "";
                 if (offset == 0 && !m_debug_process.IsValid()) {
@@ -3617,10 +3728,14 @@ namespace ams::dmnt {
                         if (cheat_process_name[0] == '\0') {
                             std::strncpy(cheat_process_name, "Application", sizeof(cheat_process_name));
                         }
-#if !defined(DMNT_GEN2_NO_CHEATVM)
-                        ams::dmnt::cheat::impl::ForceCloseCheatProcess();
-#endif
-                        os::SleepThread(ams::TimeSpan::FromMilliSeconds(100));
+                        /* Note: we deliberately do NOT close the cheat process
+                         * here. This path only builds the process list for
+                         * qXfer:osdata:processes -- a client may list processes
+                         * without ever attaching, and tearing down the user's
+                         * cheats as a side effect of listing is wrong.
+                         * DebugProcess::Attach() closes it when we actually
+                         * attach, and re-opens it once our initial debug events
+                         * have been consumed. */
                     }
                 }
 

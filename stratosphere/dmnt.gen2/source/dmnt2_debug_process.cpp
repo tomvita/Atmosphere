@@ -30,13 +30,65 @@ namespace ams::dmnt {
     }
 
     Result DebugProcess::Attach(os::ProcessId process_id, bool start_process) {
+        /* Can we join the cheat engine's debug handle instead of taking the
+         * process away from it?
+         *
+         * dmnt and dmnt.gen2 are one sysmodule now and share a single debug
+         * handle (dmnt2_shared_debug_handle.cpp), so the "only one debugger per
+         * process" restriction that forced a detach no longer applies. When the
+         * handle is already open for the process we want, we join it: the cheat
+         * VM, its cheat list, its toggles and its frozen addresses all survive a
+         * gen2 attach untouched, and there is no svcDebugActiveProcess to come
+         * back ResultBusy while the kernel finishes an asynchronous detach
+         * (which is what "attach, fail, attach again" was).
+         *
+         * Not joinable when we have to start the process ourselves (there are
+         * real initial debug events to consume in that case), or when the
+         * handle is open for some other process - the shared handle is a single
+         * slot, so the cheat engine genuinely has to let go. */
+        const bool can_join = !start_process
+                           && dmnt::dbg::GetSharedDebugHandle() != os::InvalidNativeHandle
+                           && dmnt::dbg::GetSharedProcessId() == process_id;
+
 #if !defined(DMNT_GEN2_NO_CHEATVM)
-        /* Cleanly detach the cheat process if it was attached. */
-        if (dmnt::dbg::GetSharedDebugHandle() != os::InvalidNativeHandle) {
+        if (can_join) {
+            /* Take over debug-event handling, but leave the cheat process
+             * attached. Wait for the events thread to actually park: setting
+             * the flag alone leaves a window in which it can still wake on an
+             * event and continue it out from under us. */
+            ams::dmnt::cheat::impl::SuspendDebugEvents(true);
+            if (!ams::dmnt::cheat::impl::WaitDebugEventsParked(ams::TimeSpan::FromMilliSeconds(200))) {
+                AMS_DMNT2_GDB_LOG_WARN("DebugProcess::Attach: cheat debug-events thread did not park\n");
+            }
+        } else if (dmnt::dbg::GetSharedDebugHandle() != os::InvalidNativeHandle) {
+            /* Cleanly detach the cheat process if it was attached. */
             ams::dmnt::cheat::impl::ForceCloseCheatProcess();
             /* Sleep briefly to allow the kernel asynchronously to detach. */
             os::SleepThread(ams::TimeSpan::FromMilliSeconds(100));
         }
+
+        /* Every early return below this point used to leave the cheat process
+         * closed and its debug-events thread suspended.
+         *
+         * That combination is worse than it looks: ForceCloseCheatProcess()
+         * above already tore the cheat engine down, and the only re-open used
+         * to be at the very end of this function, on the success path. A client
+         * (Breeze, bookmark.ovl) that then called ForceOpenCheatProcess() to
+         * recover would re-attach with svcDebugActiveProcess -- which suspends
+         * the game -- and the cheat DebugEventsThread, still gated by
+         * g_suspend_debug_events, would never call ContinueCheatProcess. The
+         * game stays frozen until the console is slept and woken.
+         *
+         * Restore both on any failure, in that order: un-suspend first so the
+         * events thread is live before the re-attach hands it a suspended
+         * process. On the join path there is nothing to re-open, so only the
+         * suspend is undone. */
+        auto cheat_guard = SCOPE_GUARD {
+            ams::dmnt::cheat::impl::SuspendDebugEvents(false);
+            if (!can_join) {
+                ams::dmnt::cheat::impl::ForceOpenCheatProcess();
+            }
+        };
 #endif
 
         /* Attach Gen2. */
@@ -52,8 +104,18 @@ namespace ams::dmnt {
             R_ABORT_UNLESS(pm::dmnt::StartProcess(process_id));
         }
 
-        /* Collect initial information. */
-        R_TRY(this->Start());
+        /* Collect initial information.
+         *
+         * Start() replays the initial debug events (CreateProcess, one
+         * CreateThread per thread, DebuggerAttached) and leaves the process
+         * halted. Those events were consumed by the cheat engine long ago on
+         * the join path, so there StartShared() reconstructs the same state
+         * from svcGetThreadList and leaves the process running. */
+        if (can_join) {
+            R_TRY(this->StartShared(process_id));
+        } else {
+            R_TRY(this->Start());
+        }
 
         /* Get the attached modules. */
         R_TRY(this->CollectModules());
@@ -67,6 +129,25 @@ namespace ams::dmnt {
         /* Get process info. */
         this->CollectProcessInfo();
 
+#if !defined(DMNT_GEN2_NO_CHEATVM)
+        if (!can_join) {
+            /* Re-open the cheat process now that our own initial debug events
+             * have been consumed. AttachDmnt() sees the shared handle already
+             * open for this same process, so it joins it rather than re-opening
+             * -- which would steal the handle back and invalidate our session.
+             * Without this the cheat VM stays detached for the life of the GDB
+             * session and does not come back afterwards, because
+             * DetectLaunchThread only re-attaches on a new application launch.
+             *
+             * On the join path we never closed it, so there is nothing to do:
+             * the cheat process, its VM state and its frozen addresses are
+             * still exactly as the user left them. */
+            ams::dmnt::cheat::impl::ForceOpenCheatProcess();
+        }
+
+        cheat_guard.Cancel();
+#endif
+
         R_SUCCEED();
     }
 
@@ -77,9 +158,22 @@ namespace ams::dmnt {
         if (m_is_valid) {
             m_software_breakpoints.ClearAll();
 
-            if (m_status == ProcessStatus_DebugBreak) {
-                this->Continue();
-            }
+            /* Always try to resume, rather than only when m_status says we are
+             * halted.
+             *
+             * m_status is not a reliable answer to "is the process stopped".
+             * Continue(thread_id) resumes a single thread but sets the status
+             * to Running for the whole process, so after a single-thread
+             * continue the remaining threads can still be stopped while
+             * m_status reads Running - and we would walk away leaving the game
+             * frozen. A Continue with no pending debug event simply fails, so
+             * attempting it unconditionally costs nothing.
+             *
+             * The cheat engine's events thread also resumes the process once
+             * SuspendDebugEvents(false) below un-parks it, but only when it is
+             * attached; this has to be right on its own for
+             * DMNT_GEN2_NO_CHEATVM builds and for processes it does not hold. */
+            this->Continue();
 
             dmnt::dbg::DetachGen2();
             m_debug_handle = svc::InvalidHandle;
@@ -162,6 +256,54 @@ namespace ams::dmnt {
     Result DebugProcess::StartShared(os::ProcessId process_id) {
         m_process_id = process_id;
 
+        /* Halt the process before we query anything about it, and consume the
+         * resulting event ourselves, so that Attach() returns with the same
+         * contract as Start(): valid, stopped, nothing in flight.
+         *
+         * This has to happen first, not last. We joined a handle whose initial
+         * events the cheat engine drained long ago, so the process is running
+         * when we get here -- and svc::GetDebugThreadContext fails on a running
+         * thread. Building the thread table before breaking left every thread
+         * with no TLS address and garbage thread info, which is what broke GDB
+         * breakpoints on the join path (and only on the join path, i.e. only
+         * once Breeze had launched and left the cheat engine attached).
+         *
+         * Two more reasons it cannot be left to the caller: vAttach's stop
+         * reply is built from GetThreadContext, which is meaningless while the
+         * process runs; and a Break() from that side lets the DebuggerBreak
+         * event reach ProcessDebugEvents, which answers it with a second
+         * asynchronous stop reply on top of vAttach's own. Consuming it here
+         * keeps it off the wire.
+         *
+         * Safe because the cheat engine's events thread is parked by now
+         * (Attach waited for it), so nothing else can take the event first.
+         *
+         * Callers that want the game running continue explicitly, exactly as
+         * they already do on the Start() path -- gen2's ATTACH_CONT does. */
+        if (R_SUCCEEDED(svc::BreakDebugProcess(m_debug_handle))) {
+            const auto start  = os::GetSystemTick();
+            const auto budget = TimeSpan::FromSeconds(1);
+            while (os::ConvertToTimeSpan(os::GetSystemTick() - start) < budget) {
+                s32 dummy_index;
+                svc::Handle handle = m_debug_handle;
+                if (R_FAILED(svc::WaitSynchronization(std::addressof(dummy_index), std::addressof(handle), 1, TimeSpan::FromMilliSeconds(20).GetNanoSeconds()))) {
+                    continue;
+                }
+
+                svc::DebugEventInfo d;
+                if (R_FAILED(this->GetProcessDebugEvent(std::addressof(d)))) {
+                    continue;
+                }
+
+                if (d.type == svc::DebugEvent_Exception && d.info.exception.type == svc::DebugException_DebuggerBreak) {
+                    this->SetLastThreadId(d.thread_id);
+                    break;
+                }
+            }
+        } else {
+            AMS_DMNT2_GDB_LOG_WARN("DebugProcess::StartShared: BreakDebugProcess failed\n");
+        }
+
         /* Query memory extents to infer address space flags. */
         this->CollectProcessInfo();
 
@@ -184,6 +326,13 @@ namespace ams::dmnt {
         /* Copy default process name. */
         std::strncpy(m_create_process_info.name, "Application", sizeof(m_create_process_info.name));
         m_create_process_info.name[sizeof(m_create_process_info.name) - 1] = '\0';
+
+        /* Rebuild the thread table from scratch: draining the break above can
+         * have consumed a queued CreateThread event and already added an entry,
+         * and ThreadCreate() does not deduplicate. */
+        m_thread_count = 0;
+        std::memset(m_thread_valid, 0, sizeof(m_thread_valid));
+        std::memset(m_thread_ids, 0, sizeof(m_thread_ids));
 
         /* Retrieve active thread list from the OS using GetThreadList. */
         s32 num_threads = 0;
@@ -212,8 +361,6 @@ namespace ams::dmnt {
                 }
             }
         }
-
-
 
         /* Set ourselves as valid. */
         m_is_valid = true;

@@ -51,7 +51,23 @@ namespace ams::dmnt::dbg {
     Result AttachGen2(os::ProcessId process_id) {
         std::scoped_lock lk(g_shared_handle_lock);
 
-        if (g_shared_debug_handle != os::InvalidNativeHandle && (!g_attach_gen2 || g_shared_process_id != process_id)) {
+        /* Join a handle that is already open for this process rather than
+         * re-opening it, exactly as AttachDmnt does.
+         *
+         * This used to re-open whenever gen2 itself was not yet attached (the
+         * condition also tested `!g_attach_gen2`), which closed the handle out
+         * from under the cheat engine even when it was already open for the
+         * very process we wanted. That was the sole reason
+         * DebugProcess::Attach() had to ForceCloseCheatProcess() first -- and
+         * closing the cheat process wipes the cheat list, the toggles and the
+         * whole frozen-address map, then re-reads every cheat off the SD card
+         * on the way back. The handle is shared; there is no kernel reason to
+         * churn it.
+         *
+         * A different process is still a real re-open: the shared handle is a
+         * single slot, so the cheat engine has to be told to let go, which the
+         * caller does with ForceCloseCheatProcess. */
+        if (g_shared_debug_handle != os::InvalidNativeHandle && g_shared_process_id != process_id) {
             svc::CloseHandle(g_shared_debug_handle);
             g_shared_debug_handle = os::InvalidNativeHandle;
             g_shared_process_id   = os::InvalidProcessId;

@@ -27,6 +27,20 @@ namespace ams::dmnt::cheat::impl {
 
         std::atomic<bool> g_suspend_debug_events = false;
 
+        /* Acknowledgement for g_suspend_debug_events: true whenever
+         * DebugEventsThread is definitely not inside WaitSynchronization /
+         * ContinueCheatProcess on the shared debug handle.
+         *
+         * gen2 now joins the cheat engine's debug handle instead of forcing it
+         * closed, so both sides can wait on the same handle and only the
+         * suspend flag keeps them apart. Setting the flag is not enough on its
+         * own: the thread tests it before a 100 ms wait, so for up to 100 ms
+         * afterwards it can still wake on an event and continue it out from
+         * under gen2. A caller that is about to take over event handling waits
+         * for this to go true first. Starts true - the thread is parked on
+         * m_debug_events_event until a process is attached. */
+        std::atomic<bool> g_debug_events_parked = true;
+
         /* Helper definitions. */
         constexpr size_t MaxCheatCount = 0x80;
         constexpr size_t MaxFrozenAddressCount = 0x80;
@@ -315,6 +329,20 @@ namespace ams::dmnt::cheat::impl {
                 Result ForceCloseCheatProcess() {
                     this->CloseActiveCheatProcess();
                     R_SUCCEED();
+                }
+
+                void CancelDebugEventsWait() {
+                    /* Same knock-out CloseActiveCheatProcess uses, without
+                     * tearing anything down: just make DebugEventsThread return
+                     * from WaitSynchronization so it re-tests the suspend flag
+                     * immediately. */
+                    if (m_cheat_process_debug_handle == os::InvalidNativeHandle) {
+                        return;
+                    }
+
+                    std::scoped_lock lk(util::GetReference(m_debug_events_thread.cs_thread));
+
+                    R_ABORT_UNLESS(svc::CancelSynchronization(m_debug_events_thread.thread_impl->handle));
                 }
 
                 Result ReadCheatProcessMemoryUnsafe(u64 proc_addr, void *out_data, size_t size) {
@@ -748,15 +776,24 @@ namespace ams::dmnt::cheat::impl {
             CheatProcessManager *manager = reinterpret_cast<CheatProcessManager *>(_this);
             while (true) {
                 /* Atomically wait (and clear) signal for new process. */
+                g_debug_events_parked = true;
                 manager->m_debug_events_event.Wait();
                 while (true) {
                     if (g_suspend_debug_events) {
+                        g_debug_events_parked = true;
                         os::SleepThread(TimeSpan::FromMilliSeconds(10));
                         continue;
                     }
 
                     os::NativeHandle cheat_process_handle = manager->GetCheatProcessHandle();
                     s32 dummy;
+
+                    /* From here until we fall out of the wait loop we may own a
+                     * debug event on the shared handle. Publish that so a
+                     * caller taking over event handling can wait us out. */
+                    g_debug_events_parked = false;
+                    ON_SCOPE_EXIT { g_debug_events_parked = true; };
+
                     while (!g_suspend_debug_events && cheat_process_handle != os::InvalidNativeHandle && R_SUCCEEDED(svc::WaitSynchronization(std::addressof(dummy), std::addressof(cheat_process_handle), 1, 100'000'000))) {
                         manager->m_cheat_lock.Lock();
                         ON_SCOPE_EXIT { manager->m_cheat_lock.Unlock(); };
@@ -1275,6 +1312,25 @@ namespace ams::dmnt::cheat::impl {
 
     void SuspendDebugEvents(bool suspend) {
         g_suspend_debug_events = suspend;
+
+        if (suspend) {
+            /* Knock the events thread out of its 100 ms WaitSynchronization so
+             * it observes the flag now instead of up to 100 ms from now. The
+             * loop already treats a cancelled wait as "someone cancelled our
+             * synchronization, possibly us". */
+            GetReference(g_cheat_process_manager).CancelDebugEventsWait();
+        }
+    }
+
+    bool WaitDebugEventsParked(TimeSpan timeout) {
+        const auto start = os::GetSystemTick();
+        while (!g_debug_events_parked) {
+            if (os::ConvertToTimeSpan(os::GetSystemTick() - start) >= timeout) {
+                return false;
+            }
+            os::SleepThread(TimeSpan::FromMilliSeconds(2));
+        }
+        return true;
     }
 
     bool GetHasActiveCheatProcess() {

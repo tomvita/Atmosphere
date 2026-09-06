@@ -41,6 +41,10 @@ namespace ams::dmnt {
             WatchPoint m_breakpoints[BreakPointCountMax];
         public:
             static bool IsValidWatchPoint(u64 address, u64 size);
+
+            /* Number of watchpoint slots we may actually hand out: the
+             * registers this CPU has, not the size of the pool. */
+            static size_t GetUsableWatchPointCount();
         public:
             explicit HardwareWatchPointManager(DebugProcess *debug_process);
 
