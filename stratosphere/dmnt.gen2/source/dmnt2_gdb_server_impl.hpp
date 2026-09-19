@@ -64,6 +64,7 @@ namespace ams::dmnt {
             u8 gen2_server_on = 0;
             void Gen2Attach();
             m_from_stack_t get_from_stack(svc::ThreadContext &thread_context, bool get_address);
+            bool BreakFilterMatches(svc::ThreadContext &thread_context);
             void set_next_watch_for_exclusive_search();
             bool HasDebugProcess() const { return m_debug_process.IsValid(); }
             os::NativeHandle GetDebugHandle() const { return m_debug_process.GetHandle(); }

@@ -24,6 +24,8 @@
 namespace ams::dmnt {
 
         m_watch_data_t m_watch_data;
+        /* Breeze keeps the first 7232 bytes in its saved results; the filter must start there. */
+        static_assert(__builtin_offsetof(m_watch_data_t, bp_filter_flags) == 7232);
         /* Protects m_watch_data and the capture-time fields of fromU/count/
          * total_trigger/next_pc/failed against the three concurrent writers:
          *   - cheat:cht IPC handlers Get/SetGen2WatchData (Breeze, bookmark.ovl)
@@ -75,6 +77,7 @@ namespace ams::dmnt {
             std::scoped_lock lk(g_watch_data_lock);
             m_watch_data.address = 0;
             m_watch_data.bp_match_trigger = false;
+            m_watch_data.bp_filter_flags = 0;
         }
 
         /* Before a stopped thread runs on (STEP, STEPOVER, CONT), which also sets
@@ -1713,6 +1716,28 @@ namespace ams::dmnt {
         };
         return m_from_stack;
     };
+    /* The Break and Trace filter: rebuild the row a capture with the same
+     * settings would record for this hit (the call site in the top 25 bits of
+     * its address, the return addresses found on the stack) and compare the
+     * parts the client chose. Call with g_watch_data_lock held. */
+    bool GdbServerImpl::BreakFilterMatches(svc::ThreadContext &thread_context) {
+        const u32 flags = m_watch_data.bp_filter_flags;
+        if (flags == 0) {
+            return true;
+        }
+        const m_from_stack_t entry = get_from_stack(thread_context, true);
+        if ((flags & BP_FILTER_X30) != 0 && static_cast<u32>((entry.address >> 39) & 0x1FFFFFF) != m_watch_data.bp_filter_call_from) {
+            return false;
+        }
+        for (int slot = 0; slot < max_call_stack; slot++) {
+            if ((flags & BP_FILTER_STACK(slot)) != 0 &&
+                std::memcmp(&entry.stack[slot], &m_watch_data.bp_filter_stack[slot], sizeof(call_stack_t)) != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void GdbServerImpl::ProcessDebugEvents() {
         AMS_DMNT2_GDB_LOG_DEBUG("Processing debug events for %016lx\n", m_process_id.value);
 
@@ -1852,7 +1877,7 @@ namespace ams::dmnt {
                                                         //     return true;
                                                         // };
                                                         if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(thread_context), thread_id, svc::ThreadContextFlag_All))) {
-                                                            const bool is_trigger_bp = IsBreakTrigger(thread_context);
+                                                            const bool is_trigger_bp = IsBreakTrigger(thread_context) && BreakFilterMatches(thread_context);
 
                                                             if (is_trigger_bp) {
                                                                 m_watch_data.bp_hit = true;
@@ -2097,7 +2122,7 @@ namespace ams::dmnt {
                                                 svc::ThreadContext thread_context;
                                                 if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(thread_context), thread_id, svc::ThreadContextFlag_All))) {
 
-                                                    const bool is_trigger_bp = IsBreakTrigger(thread_context);
+                                                    const bool is_trigger_bp = IsBreakTrigger(thread_context) && BreakFilterMatches(thread_context);
 
                                                     if (is_trigger_bp) {
                                                         m_watch_data.bp_hit = true;

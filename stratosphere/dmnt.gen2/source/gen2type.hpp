@@ -118,4 +118,13 @@
             u64 bp_match_pc = 0;
             u64 bp_match_lr = 0;
             u32 bp_original_insn = 0;
+            // v0.16 Break and Trace filter, appended after the older layout (16-byte
+            // aligned, so it starts where that block ended): a hit breaks only when
+            // the row a capture would record for it matches the chosen parts of a
+            // captured row. Zeroed when a client sends the older, shorter block.
+            alignas(16) u32 bp_filter_flags = 0;  // BP_FILTER_X30 | BP_FILTER_STACK(slot)
+            u32 bp_filter_call_from = 0;          // the row's call site: (x30 - main) >> 2
+            call_stack_t bp_filter_stack[max_call_stack]{};
         } m_watch_data_t;
+#define BP_FILTER_X30 1u
+#define BP_FILTER_STACK(slot) (2u << (slot))
