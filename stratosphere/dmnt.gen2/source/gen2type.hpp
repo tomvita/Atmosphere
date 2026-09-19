@@ -1,7 +1,7 @@
 #define max_watch_buffer 0x200
 #define max_call_stack 5
 #define stack_check_size 100
-#define GEN2_VERSION "v0.15"
+#define GEN2_VERSION "v0.16"
         typedef struct {
             u64 address:64;
             u32 count:32;
@@ -51,7 +51,9 @@
             CLEARB,
             STEP,
             STEPOVER,
-            SETREGS
+            SETREGS,
+            PAUSE,      // v0.16: stop the game (the overlay's "pauses game"), through gen2's own events
+            RESUME      // v0.16: let a game PAUSE stopped run again
         };
         enum x30_catch_type_t {
             OFFSET,
@@ -111,6 +113,7 @@
             u64 bp_addr = 0;
             u64 bp_thread_id = 0;
             ams::svc::ThreadContext bp_ctx{};
+            // Break and Trace: a hit stops the game when pc and lr match; 0 matches any value (v0.16)
             bool bp_match_trigger = false;
             u64 bp_match_pc = 0;
             u64 bp_match_lr = 0;
