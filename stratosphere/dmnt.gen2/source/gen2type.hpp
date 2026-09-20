@@ -53,8 +53,10 @@
             STEPOVER,
             SETREGS,
             PAUSE,      // v0.16: stop the game (the overlay's "pauses game"), through gen2's own events
-            RESUME      // v0.16: let a game PAUSE stopped run again
+            RESUME,     // v0.16: let a game PAUSE stopped run again
+            GETTHREADS  // v0.16: fill the thread list below, and refresh bp_ctx for bp_thread_id
         };
+#define max_thread_list 32
         enum x30_catch_type_t {
             OFFSET,
             NONE,
@@ -125,6 +127,17 @@
             alignas(16) u32 bp_filter_flags = 0;  // BP_FILTER_X30 | BP_FILTER_STACK(slot)
             u32 bp_filter_call_from = 0;          // the row's call site: (x30 - main) >> 2
             call_stack_t bp_filter_stack[max_call_stack]{};
+            // v0.16 thread list (GETTHREADS): every thread of the game and where
+            // it stands. A stopped game holds them all; a paused one has each
+            // thread wherever it happened to be, so there is no single PC.
+            u32 thread_count = 0;
+            struct {
+                u64 id;
+                u64 pc;
+                u64 lr;
+                u64 sp;
+                char name[32];
+            } threads[max_thread_list]{};
         } m_watch_data_t;
 #define BP_FILTER_X30 1u
 #define BP_FILTER_STACK(slot) (2u << (slot))

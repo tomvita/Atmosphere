@@ -35,6 +35,14 @@ namespace ams::dmnt {
     }
 
     Result BreakPointManager::SetBreakPoint(uintptr_t address, size_t size, bool is_step) {
+        /* One breakpoint per address. A second one at the same address saves the
+         * first one's break instruction as the instruction it replaced, and
+         * clearing it then writes that break instruction back into the game --
+         * a breakpoint nothing knows about, which keeps stopping the game. */
+        if (this->HasBreakPoint(address)) {
+            R_SUCCEED();
+        }
+
         /* Get a free breakpoint. */
         BreakPoint *bp = static_cast<BreakPoint *>(this->GetFreeBreakPoint());
 

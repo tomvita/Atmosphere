@@ -162,6 +162,12 @@ namespace ams::dmnt {
     }
 
     Result HardwareWatchPointManager::SetWatchPoint(u64 address, u64 size, bool read, bool write) {
+        /* One watchpoint per address: copies pile up in the debug registers and a
+         * hit only clears one of them. */
+        if (this->HasBreakPoint(address)) {
+            R_SUCCEED();
+        }
+
         /* Get a free watchpoint. */
         auto *bp = static_cast<WatchPoint *>(this->GetFreeBreakPoint());
         R_UNLESS(bp != nullptr, svc::ResultOutOfHandles());

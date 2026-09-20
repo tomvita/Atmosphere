@@ -119,12 +119,22 @@ namespace ams::dmnt {
                 if (m_watch_data.attached) {
                     m_watch_data.bp_hit = (m_debug_process.GetStatus() == DebugProcess::ProcessStatus_DebugBreak);
                     if (m_watch_data.bp_hit) {
-                        m_watch_data.bp_thread_id = m_debug_process.GetLastThreadId();
+                        /* Not while a command is pending: the client may have picked
+                         * another thread for it to act on (the thread list). */
+                        if (!m_watch_data.execute) {
+                            m_watch_data.bp_thread_id = m_debug_process.GetLastThreadId();
+                        }
                         if (!m_watch_data.execute || m_watch_data.command != SETREGS) {
                             svc::ThreadContext ctx{};
                             if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(ctx), m_watch_data.bp_thread_id, svc::ThreadContextFlag_All))) {
                                 m_watch_data.bp_ctx = ctx;
-                                m_watch_data.bp_addr = ctx.pc;
+                                /* bp_addr is where the client wants SETB / CLEARB to
+                                 * act, and it has already written it when a command is
+                                 * pending: overwriting it here set the breakpoint at
+                                 * the PC instead of at the address asked for. */
+                                if (!m_watch_data.execute) {
+                                    m_watch_data.bp_addr = ctx.pc;
+                                }
                                 m_watch_data.bp_original_insn = m_debug_process.GetSoftwareBreakPointOriginalInstruction(ctx.pc);
                             }
                         }
@@ -453,6 +463,34 @@ namespace ams::dmnt {
                         g_gen2_pause = Gen2Pause::None;
                         if (this->HasDebugProcess() && m_debug_process.GetStatus() == DebugProcess::ProcessStatus_DebugBreak) {
                             m_debug_process.Continue();
+                        }
+                    }
+                    break;
+                }
+                case GETTHREADS: {
+                    std::scoped_lock lk(g_watch_data_lock);
+                    m_watch_data.thread_count = 0;
+                    if (this->HasDebugProcess()) {
+                        /* Not on the stack: gen2_loop runs on a small stack and its
+                         * frame holds the locals of every case. Only the lock this
+                         * case already holds guards it. */
+                        static u64 thread_ids[max_thread_list];
+                        s32 count = 0;
+                        m_debug_process.GetThreadList(std::addressof(count), thread_ids, util::size(thread_ids));
+                        for (s32 i = 0; i < count && m_watch_data.thread_count < max_thread_list; i++) {
+                            svc::ThreadContext ctx;
+                            if (R_FAILED(m_debug_process.GetThreadContext(std::addressof(ctx), thread_ids[i], svc::ThreadContextFlag_Control))) {
+                                continue;
+                            }
+                            auto &entry = m_watch_data.threads[m_watch_data.thread_count++];
+                            entry.id = thread_ids[i];
+                            entry.pc = ctx.pc;
+                            entry.lr = ctx.lr;
+                            entry.sp = ctx.sp;
+                            char name[os::ThreadNameLengthMax + 1] = {};
+                            m_debug_process.GetThreadName(name, thread_ids[i]);
+                            std::strncpy(entry.name, name, sizeof(entry.name) - 1);
+                            entry.name[sizeof(entry.name) - 1] = 0;
                         }
                     }
                     break;
