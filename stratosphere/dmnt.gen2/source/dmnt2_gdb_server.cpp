@@ -27,7 +27,10 @@ namespace ams::dmnt {
     namespace {
 
         constexpr size_t ServerThreadStackSize = util::AlignUp(4 * GdbPacketBufferSize + os::MemoryPageSize, os::ThreadStackAlignment);
-        constexpr size_t ServerThreadStackSize2 = util::AlignUp(os::MemoryPageSize, os::ThreadStackAlignment);
+        /* gen2_loop runs here. One page left almost nothing for the deepest path
+         * (a command that attaches, which creates a thread), and a local array
+         * added to one of its cases was enough to run off the end of it. */
+        constexpr size_t ServerThreadStackSize2 = util::AlignUp(4 * os::MemoryPageSize, os::ThreadStackAlignment);
 
         alignas(os::ThreadStackAlignment) constinit u8 g_server_thread_stack[ServerThreadStackSize];
         alignas(os::ThreadStackAlignment) constinit u8 g_events_thread_stack[util::AlignUp(2 * GdbPacketBufferSize + os::MemoryPageSize, os::ThreadStackAlignment)];

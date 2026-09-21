@@ -155,6 +155,9 @@ namespace ams::dmnt {
             Result Step(u64 thread_id);
             void ClearStep();
             bool IsStepping() const { return m_stepping; }
+            /* The temporary breakpoints STEPOVER puts after a call. ClearStep only
+             * clears them while single-stepping, which a step over a call isn't. */
+            void ClearStepBreakPoints() { m_step_breakpoints.ClearStep(); }
 
             Result Break();
 

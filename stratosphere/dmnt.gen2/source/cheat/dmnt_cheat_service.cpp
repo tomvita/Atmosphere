@@ -223,6 +223,12 @@ namespace ams::dmnt::cheat {
         {
             std::scoped_lock lk(ams::dmnt::g_watch_data_lock);
             std::memcpy(std::addressof(ams::dmnt::m_watch_data), buffer.GetPointer(), copy_size);
+            /* An older client's block ends before the Break and Trace filter:
+             * leave no filter of an earlier client behind for its breakpoint. */
+            if (copy_size < sizeof(ams::dmnt::m_watch_data)) {
+                std::memset(reinterpret_cast<u8 *>(std::addressof(ams::dmnt::m_watch_data)) + copy_size, 0,
+                            sizeof(ams::dmnt::m_watch_data) - copy_size);
+            }
             /* Wake the gen2_loop polling thread immediately if the client
              * is requesting an action. This is the Opt 1 latency fix:
              * sub-millisecond command dispatch instead of waiting up to

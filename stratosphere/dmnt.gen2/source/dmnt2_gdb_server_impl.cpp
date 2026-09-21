@@ -24,6 +24,7 @@
 namespace ams::dmnt {
 
         m_watch_data_t m_watch_data;
+        static_assert(__builtin_offsetof(m_watch_data_t, bp_filter_flags) == GEN2_SAVED_SIZE);
         /* Protects m_watch_data and the capture-time fields of fromU/count/
          * total_trigger/next_pc/failed against the three concurrent writers:
          *   - cheat:cht IPC handlers Get/SetGen2WatchData (Breeze, bookmark.ovl)
@@ -47,6 +48,54 @@ namespace ams::dmnt {
          * See design doc Bug 5 / Opt 2.
          */
         constinit u8 g_gen2_server_on = 0;
+
+        /* Break and Trace: whether a hit on the watched address stops the game.
+         * A zero bp_match_pc or bp_match_lr matches any value, so with both zero
+         * every hit breaks (address alone). Call with g_watch_data_lock held. */
+        static bool IsBreakTrigger(const svc::ThreadContext &ctx) {
+            if (!m_watch_data.bp_match_trigger) {
+                return false;
+            }
+            constexpr u64 AddressMask = 0x7FFFFFFFFFULL;
+            const u64 pc = m_watch_data.bp_match_pc & AddressMask;
+            const u64 lr = m_watch_data.bp_match_lr & AddressMask;
+            return (pc == 0 || (ctx.pc & AddressMask) == pc) && (lr == 0 || (ctx.lr & AddressMask) == lr);
+        }
+
+        /* A fresh attach has no watch or breakpoint yet, whatever the client's
+         * copy it sent along says: address != 0 is how clients tell a watch is
+         * set, so a stale one showed a watch that wasn't there. */
+        /* PAUSE / RESUME. dmnt's own pause shares the debug handle and its resume
+         * drains every pending debug event, capture hits included, which crashed
+         * games while a capture ran. Break() only raises a DebuggerBreak event,
+         * which arrives later: a RESUME before it is remembered. */
+        enum class Gen2Pause : u8 { None, Requested, Paused, ResumeRequested };
+        constinit Gen2Pause g_gen2_pause = Gen2Pause::None;
+
+        static void ForgetWatchAfterAttach() {
+            std::scoped_lock lk(g_watch_data_lock);
+            m_watch_data.address = 0;
+            m_watch_data.bp_match_trigger = false;
+            m_watch_data.bp_filter_flags = 0;
+        }
+
+        /* Before a stopped thread runs on (STEP, STEPOVER, CONT), which also sets
+         * the rearm flag: take the watch off where it would fire again at once, so
+         * the thread can get past it. That is the watched instruction under the PC,
+         * or a data watch for a single step (the instruction may be the access).
+         * A step that only ever re-hit it looked like a step that did nothing. */
+        static void LiftWatchForStep(DebugProcess &process, u64 pc, bool single_step) {
+            if (m_watch_data.address == 0) {
+                return;
+            }
+            if (m_watch_data.read || m_watch_data.write) {
+                if (single_step) {
+                    static_cast<void>(process.ClearWatchPoint(m_watch_data.address, m_watch_data.size));
+                }
+            } else if ((pc & 0x7FFFFFFFFFULL) == (m_watch_data.address & 0x7FFFFFFFFFULL)) {
+                static_cast<void>(process.ClearHardwareBreakPoint(m_watch_data.address, m_watch_data.size));
+            }
+        }
 // #include "led.hpp"
         bool GdbServerImpl::gen2_loop() {
             /* Note: we acquire+release the watch_data lock around each
@@ -69,12 +118,22 @@ namespace ams::dmnt {
                 if (m_watch_data.attached) {
                     m_watch_data.bp_hit = (m_debug_process.GetStatus() == DebugProcess::ProcessStatus_DebugBreak);
                     if (m_watch_data.bp_hit) {
-                        m_watch_data.bp_thread_id = m_debug_process.GetLastThreadId();
+                        /* Not while a command is pending: the client may have picked
+                         * another thread for it to act on (the thread list). */
+                        if (!m_watch_data.execute) {
+                            m_watch_data.bp_thread_id = m_debug_process.GetLastThreadId();
+                        }
                         if (!m_watch_data.execute || m_watch_data.command != SETREGS) {
                             svc::ThreadContext ctx{};
                             if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(ctx), m_watch_data.bp_thread_id, svc::ThreadContextFlag_All))) {
                                 m_watch_data.bp_ctx = ctx;
-                                m_watch_data.bp_addr = ctx.pc;
+                                /* bp_addr is where the client wants SETB / CLEARB to
+                                 * act, and it has already written it when a command is
+                                 * pending: overwriting it here set the breakpoint at
+                                 * the PC instead of at the address asked for. */
+                                if (!m_watch_data.execute) {
+                                    m_watch_data.bp_addr = ctx.pc;
+                                }
                                 m_watch_data.bp_original_insn = m_debug_process.GetSoftwareBreakPointOriginalInstruction(ctx.pc);
                             }
                         }
@@ -87,11 +146,17 @@ namespace ams::dmnt {
                         if (m_step_original_pc != 0) {
                             m_debug_process.SetBreakPoint(m_step_original_pc, 4, false);
                         }
+                        /* Clear before setting: every step re-arms, and the managers
+                         * take a new slot for an address already set. The copies
+                         * piled up, a hit cleared only one, and every later step
+                         * or continue stopped at once on the next copy. */
                         if (m_watchpoint_rearm_pending) {
+                            m_debug_process.ClearWatchPoint(m_watch_data.address, m_watch_data.size);
                             m_debug_process.SetWatchPoint(m_watch_data.address, m_watch_data.size, m_watch_data.read, m_watch_data.write);
                             m_watchpoint_rearm_pending = false;
                         }
                         if (m_instruction_rearm_pending) {
+                            m_debug_process.ClearHardwareBreakPoint(m_watch_data.address, m_watch_data.size);
                             m_debug_process.SetHardwareBreakPoint(m_watch_data.address, m_watch_data.size, false);
                             m_instruction_rearm_pending = false;
                         }
@@ -100,6 +165,7 @@ namespace ams::dmnt {
                         if (m_continue_after_step) {
                             m_continue_after_step = false;
                             m_debug_process.Continue();
+                            m_watch_data.bp_hit = false;
                         }
                     }
                 } else {
@@ -160,6 +226,7 @@ namespace ams::dmnt {
                     m_gen2_watch_active = false;
 
                     m_debug_process.Detach();
+                    g_gen2_pause = Gen2Pause::None;
 
 #if !defined(DMNT_GEN2_NO_CHEATVM)
                     dmnt::cheat::impl::SuspendDebugEvents(false);
@@ -186,6 +253,7 @@ namespace ams::dmnt {
                     }
                     if (!this->HasDebugProcess()) {
                         Gen2Attach();
+                        ForgetWatchAfterAttach();
                     }
                     {
                         std::scoped_lock lk(g_watch_data_lock);
@@ -202,6 +270,7 @@ namespace ams::dmnt {
                     }
                     if (!this->HasDebugProcess()) {
                         Gen2Attach();
+                        ForgetWatchAfterAttach();
                     }
                     {
                         std::scoped_lock lk(g_watch_data_lock);
@@ -219,8 +288,10 @@ namespace ams::dmnt {
                         }
                         svc::ThreadContext ctx;
                         bool has_bp = false;
+                        bool has_ctx = false;
                         if (thread_id != 0 && R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(ctx), thread_id, svc::ThreadContextFlag_Control))) {
                             has_bp = m_debug_process.HasSoftwareBreakPoint(ctx.pc);
+                            has_ctx = true;
                         }
                         const bool has_wp = m_watch_data.bp_hit && m_watch_data.address != 0 && (m_watch_data.read || m_watch_data.write);
                         const bool has_ib = m_watch_data.bp_hit && m_watch_data.address != 0 && !m_watch_data.read && !m_watch_data.write;
@@ -235,12 +306,18 @@ namespace ams::dmnt {
                             m_step_pending = true;
                             m_watchpoint_rearm_pending = true;
                             m_continue_after_step = true;
+                            if (has_ctx) {
+                                LiftWatchForStep(m_debug_process, ctx.pc, true);
+                            }
                             m_debug_process.Step(thread_id);
                             m_debug_process.Continue(thread_id);
                         } else if (has_ib) {
                             m_step_pending = true;
                             m_instruction_rearm_pending = true;
                             m_continue_after_step = true;
+                            if (has_ctx) {
+                                LiftWatchForStep(m_debug_process, ctx.pc, true);
+                            }
                             m_debug_process.Step(thread_id);
                             m_debug_process.Continue(thread_id);
                         } else {
@@ -306,6 +383,7 @@ namespace ams::dmnt {
                                         m_instruction_rearm_pending = true;
                                     }
                                 }
+                                LiftWatchForStep(m_debug_process, pc, true);
                                 m_continue_after_step = false;
                                 m_debug_process.Step(thread_id);
                                 m_debug_process.Continue(thread_id);
@@ -346,6 +424,7 @@ namespace ams::dmnt {
                                         m_instruction_rearm_pending = true;
                                     }
                                 }
+                                LiftWatchForStep(m_debug_process, pc, !is_call);
                                 m_continue_after_step = false;
                                 if (is_call) {
                                     m_debug_process.SetBreakPoint(pc + 4, 4, true); // set step breakpoint
@@ -363,6 +442,54 @@ namespace ams::dmnt {
                                     m_debug_process.Continue(thread_id);
                                 }
                             }
+                        }
+                    }
+                    break;
+                }
+                case PAUSE: {
+                    std::scoped_lock lk(g_watch_data_lock);
+                    if (this->HasDebugProcess() && m_debug_process.GetStatus() == DebugProcess::ProcessStatus_Running &&
+                        R_SUCCEEDED(m_debug_process.Break())) {
+                        g_gen2_pause = Gen2Pause::Requested;
+                    }
+                    break;
+                }
+                case RESUME: {
+                    std::scoped_lock lk(g_watch_data_lock);
+                    if (g_gen2_pause == Gen2Pause::Requested) {
+                        g_gen2_pause = Gen2Pause::ResumeRequested;
+                    } else if (g_gen2_pause == Gen2Pause::Paused) {
+                        g_gen2_pause = Gen2Pause::None;
+                        if (this->HasDebugProcess() && m_debug_process.GetStatus() == DebugProcess::ProcessStatus_DebugBreak) {
+                            m_debug_process.Continue();
+                        }
+                    }
+                    break;
+                }
+                case GETTHREADS: {
+                    std::scoped_lock lk(g_watch_data_lock);
+                    m_watch_data.thread_count = 0;
+                    if (this->HasDebugProcess()) {
+                        /* Not on the stack: gen2_loop runs on a small stack and its
+                         * frame holds the locals of every case. Only the lock this
+                         * case already holds guards it. */
+                        static u64 thread_ids[max_thread_list];
+                        s32 count = 0;
+                        m_debug_process.GetThreadList(std::addressof(count), thread_ids, util::size(thread_ids));
+                        for (s32 i = 0; i < count && m_watch_data.thread_count < max_thread_list; i++) {
+                            svc::ThreadContext ctx;
+                            if (R_FAILED(m_debug_process.GetThreadContext(std::addressof(ctx), thread_ids[i], svc::ThreadContextFlag_Control))) {
+                                continue;
+                            }
+                            auto &entry = m_watch_data.threads[m_watch_data.thread_count++];
+                            entry.id = thread_ids[i];
+                            entry.pc = ctx.pc;
+                            entry.lr = ctx.lr;
+                            entry.sp = ctx.sp;
+                            char name[os::ThreadNameLengthMax + 1] = {};
+                            m_debug_process.GetThreadName(name, thread_ids[i]);
+                            std::strncpy(entry.name, name, sizeof(entry.name) - 1);
+                            entry.name[sizeof(entry.name) - 1] = 0;
                         }
                     }
                     break;
@@ -389,6 +516,19 @@ namespace ams::dmnt {
             {
                 std::scoped_lock lk(g_watch_data_lock);
                 m_watch_data.attached = this->HasDebugProcess();
+                /* bp_hit was computed before the command ran. After CONT, STEP or
+                 * STEPOVER the game runs, and until the next refresh (up to
+                 * Gen2LoopRefreshInterval) a client would see the old stop and
+                 * could not tell the next hit from it. */
+                /* CONT first steps the stopped thread over the re-armed watch; that
+                 * step can finish before this point, and the game is then broken
+                 * only until gen2_loop continues it. Not a stop either: reporting
+                 * it showed the old stop again, and the next real hit looked like
+                 * the same one. */
+                if (m_watch_data.attached) {
+                    m_watch_data.bp_hit = m_debug_process.GetStatus() == DebugProcess::ProcessStatus_DebugBreak &&
+                                          !(m_step_pending && m_continue_after_step);
+                }
                 m_watch_data.done = true;
                 return m_watch_data.gen2loop_on;
             }
@@ -1613,6 +1753,28 @@ namespace ams::dmnt {
         };
         return m_from_stack;
     };
+    /* The Break and Trace filter: rebuild the row a capture with the same
+     * settings would record for this hit (the call site in the top 25 bits of
+     * its address, the return addresses found on the stack) and compare the
+     * parts the client chose. Call with g_watch_data_lock held. */
+    bool GdbServerImpl::BreakFilterMatches(svc::ThreadContext &thread_context) {
+        const u32 flags = m_watch_data.bp_filter_flags;
+        if (flags == 0) {
+            return true;
+        }
+        const m_from_stack_t entry = get_from_stack(thread_context, true);
+        if ((flags & BP_FILTER_X30) != 0 && static_cast<u32>((entry.address >> 39) & 0x1FFFFFF) != m_watch_data.bp_filter_call_from) {
+            return false;
+        }
+        for (int slot = 0; slot < max_call_stack; slot++) {
+            if ((flags & BP_FILTER_STACK(slot)) != 0 &&
+                std::memcmp(&entry.stack[slot], &m_watch_data.bp_filter_stack[slot], sizeof(call_stack_t)) != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void GdbServerImpl::ProcessDebugEvents() {
         AMS_DMNT2_GDB_LOG_DEBUG("Processing debug events for %016lx\n", m_process_id.value);
 
@@ -1701,7 +1863,16 @@ namespace ams::dmnt {
 
                                     if ((!is_instr && !is_watchpoint) || was_stepping) {
                                          m_watch_data.intercepted = true;
-                                         m_watch_data.bp_hit = true;
+                                         /* The step CONT takes over a re-armed breakpoint is not a
+                                          * stop: gen2_loop continues the game straight away, and a
+                                          * client polling in between must not see bp_hit. */
+                                         m_watch_data.bp_hit = !(m_step_pending && m_continue_after_step);
+                                         /* A step over a call stops on a temporary breakpoint after
+                                          * it. Left in place it showed as the instruction there,
+                                          * and the next step made it a permanent one. */
+                                         if (!was_stepping) {
+                                             m_debug_process.ClearStepBreakPoints();
+                                         }
                                          m_debug_process.SetDebugBreaked();
                                          m_watch_data.bp_thread_id = thread_id;
                                          svc::ThreadContext thread_context;
@@ -1743,13 +1914,7 @@ namespace ams::dmnt {
                                                         //     return true;
                                                         // };
                                                         if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(thread_context), thread_id, svc::ThreadContextFlag_All))) {
-                                                            bool is_trigger_bp = false;
-                                                            if (m_watch_data.bp_match_trigger) {
-                                                                if ((thread_context.pc & 0x7FFFFFFFFFULL) == (m_watch_data.bp_match_pc & 0x7FFFFFFFFFULL) &&
-                                                                    (thread_context.lr & 0x7FFFFFFFFFULL) == (m_watch_data.bp_match_lr & 0x7FFFFFFFFFULL)) {
-                                                                    is_trigger_bp = true;
-                                                                }
-                                                            }
+                                                            const bool is_trigger_bp = IsBreakTrigger(thread_context) && BreakFilterMatches(thread_context);
 
                                                             if (is_trigger_bp) {
                                                                 m_watch_data.bp_hit = true;
@@ -1993,14 +2158,8 @@ namespace ams::dmnt {
                                                 /* save the info*/
                                                 svc::ThreadContext thread_context;
                                                 if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(thread_context), thread_id, svc::ThreadContextFlag_All))) {
-                                                    
-                                                    bool is_trigger_bp = false;
-                                                     if (m_watch_data.bp_match_trigger) {
-                                                         if ((thread_context.pc & 0x7FFFFFFFFFULL) == (m_watch_data.bp_match_pc & 0x7FFFFFFFFFULL) &&
-                                                             (thread_context.lr & 0x7FFFFFFFFFULL) == (m_watch_data.bp_match_lr & 0x7FFFFFFFFFULL)) {
-                                                             is_trigger_bp = true;
-                                                         }
-                                                     }
+
+                                                    const bool is_trigger_bp = IsBreakTrigger(thread_context) && BreakFilterMatches(thread_context);
 
                                                     if (is_trigger_bp) {
                                                         m_watch_data.bp_hit = true;
@@ -2140,6 +2299,19 @@ namespace ams::dmnt {
 
                                     m_debug_process.SetLastThreadId(thread_id);
                                     m_debug_process.SetThreadIdOverride(thread_id);
+
+                                    /* The break a PAUSE asked for. */
+                                    {
+                                        std::scoped_lock lk(g_watch_data_lock);
+                                        if (g_gen2_pause == Gen2Pause::ResumeRequested) {
+                                            g_gen2_pause = Gen2Pause::None;
+                                            m_debug_process.Continue();
+                                            continue;
+                                        }
+                                        if (g_gen2_pause == Gen2Pause::Requested) {
+                                            g_gen2_pause = Gen2Pause::Paused;
+                                        }
+                                    }
                                 }
                                 break;
                             case svc::DebugException_UndefinedInstruction:
@@ -2229,6 +2401,13 @@ namespace ams::dmnt {
                                     }
 
                                     m_debug_process.ClearStep();
+                                    /* Software breakpoints (SdkBreakPoint, 0xE7FFFFFF) arrive here,
+                                     * including the temporary one STEPOVER puts after a call.
+                                     * ClearStep only removes it while single-stepping, so it stayed
+                                     * in the code: the stop showed E7FFFFFF at the PC. */
+                                    if (signal == GdbSignal_BreakpointTrap) {
+                                        m_debug_process.ClearStepBreakPoints();
+                                    }
                                 }
                                 break;
                             default:
