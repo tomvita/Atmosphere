@@ -2242,7 +2242,7 @@ namespace ams::dmnt {
                                         const auto reason = info.break_reason & ~svc::BreakReason_NotificationOnlyFlag;
                                         if (reason == svc::BreakReason_PostLoadDll || reason == svc::BreakReason_PostUnloadDll) {
                                             /* Re-collect the process's modules. */
-                                            m_debug_process.CollectModules();
+                                            R_DISCARD(m_debug_process.CollectModules());
                                         }
 
                                         if (m_debug_process.GetOverrideStatus().IsHbl() && reason == svc::BreakReason_PostLoadDll) {
@@ -2261,7 +2261,7 @@ namespace ams::dmnt {
                                         }
 
                                         /* This was just a notification, so we should continue. */
-                                        m_debug_process.Continue();
+                                        R_DISCARD(m_debug_process.Continue());
                                         continue;
                                     }
 
@@ -2276,7 +2276,7 @@ namespace ams::dmnt {
 
                                             if (!is_svc_break) {
                                                 AMS_DMNT2_GDB_LOG_ERROR("UserBreak from non-SvcBreak (%08x)\n", insn);
-                                                m_debug_process.Continue();
+                                                R_DISCARD(m_debug_process.Continue());
                                                 continue;
                                             }
                                         }
@@ -2432,7 +2432,7 @@ namespace ams::dmnt {
                         AMS_DMNT2_GDB_LOG_DEBUG("CreateThread %lx\n", thread_id);
 
                         if (m_debug_process.IsValid()) {
-                            m_debug_process.Continue();
+                            R_DISCARD(m_debug_process.Continue());
                         } else {
                             AppendReplyFormat(reply_cur, reply_end, "W00");
                         }
@@ -2443,7 +2443,7 @@ namespace ams::dmnt {
                         AMS_DMNT2_GDB_LOG_DEBUG("ExitThread %lx\n", thread_id);
 
                         if (m_debug_process.IsValid()) {
-                            m_debug_process.Continue();
+                            R_DISCARD(m_debug_process.Continue());
                         } else {
                             AppendReplyFormat(reply_cur, reply_end, "W00");
                         }
@@ -2482,7 +2482,7 @@ namespace ams::dmnt {
                     break;
                 default:
                     AMS_DMNT2_GDB_LOG_DEBUG("Unhandled ProcessEvent %u %lx\n", static_cast<u32>(d.type), thread_id);
-                    m_debug_process.Continue();
+                    R_DISCARD(m_debug_process.Continue());
                     break;
             }
 
@@ -2490,7 +2490,7 @@ namespace ams::dmnt {
                 bool do_break;
                 this->SendPacket(std::addressof(do_break), send_buffer);
                 if (do_break) {
-                    m_debug_process.Break();
+                    R_DISCARD(m_debug_process.Break());
                 }
             }
         }
@@ -2505,7 +2505,7 @@ namespace ams::dmnt {
 
         /* Get the thread context. */
         svc::ThreadContext thread_context = {};
-        m_debug_process.GetThreadContext(std::addressof(thread_context), thread_id, svc::ThreadContextFlag_General | svc::ThreadContextFlag_Control);
+        R_DISCARD(m_debug_process.GetThreadContext(std::addressof(thread_context), thread_id, svc::ThreadContextFlag_General | svc::ThreadContextFlag_Control));
 
         /* Add important registers. */
         /* TODO: aarch32 */
@@ -2535,7 +2535,7 @@ namespace ams::dmnt {
         /* Add the thread core. */
         {
             u32 core = 0;
-            m_debug_process.GetThreadCurrentCore(std::addressof(core), thread_id);
+            R_DISCARD(m_debug_process.GetThreadCurrentCore(std::addressof(core), thread_id));
 
             AppendReplyFormat(m_reply_cur, m_reply_end, ";core:%u;", core);
         }
@@ -2561,7 +2561,7 @@ namespace ams::dmnt {
 
                 /* If we should, break the process. */
                 if (do_break) {
-                    m_debug_process.Break();
+                    R_DISCARD(m_debug_process.Break());
                 }
             } else {
                 os::SleepThread(TimeSpan::FromSeconds(1));
@@ -2981,7 +2981,7 @@ namespace ams::dmnt {
     }
 
     void GdbServerImpl::k() {
-        m_debug_process.Terminate();
+        R_DISCARD(m_debug_process.Terminate());
         m_killed = true;
     }
 
@@ -4015,7 +4015,7 @@ namespace ams::dmnt {
 
                     /* Get the thread core. */
                     u32 core = 0;
-                    m_debug_process.GetThreadCurrentCore(std::addressof(core), thread_ids[i]);
+                    R_DISCARD(m_debug_process.GetThreadCurrentCore(std::addressof(core), thread_ids[i]));
 
                     /* Get the thread name. */
                     char name[os::ThreadNameLengthMax + 1];
