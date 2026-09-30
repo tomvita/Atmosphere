@@ -309,13 +309,13 @@ namespace ams::dmnt {
 
         const bool is_64_bit = (m_process_aslr_size > 0xFFFFFFFFULL) || (m_process_alias_size > 0xFFFFFFFFULL);
         if (is_64_bit) {
-            m_create_process_info.flags = svc::CreateProcessFlag_Is64Bit | svc::CreateProcessFlag_AddressSpace64Bit;
+            m_create_process_info.flags = svc::CreateProcessParameterFlag_64Bit | svc::CreateProcessParameterFlag_AddressSpace64Bit39;
         } else {
-            m_create_process_info.flags = svc::CreateProcessFlag_AddressSpace32Bit;
+            m_create_process_info.flags = svc::CreateProcessParameterFlag_AddressSpace32Bit;
         }
 
-        m_is_64_bit               = (m_create_process_info.flags & svc::CreateProcessFlag_Is64Bit);
-        m_is_64_bit_address_space = (m_create_process_info.flags & svc::CreateProcessFlag_AddressSpaceMask) == svc::CreateProcessFlag_AddressSpace64Bit;
+        m_is_64_bit               = (m_create_process_info.flags & svc::CreateProcessParameterFlag_64Bit);
+        m_is_64_bit_address_space = (m_create_process_info.flags & svc::CreateProcessParameterFlag_AddressSpaceMask) == svc::CreateProcessParameterFlag_AddressSpace64Bit39;
 
         /* Populate process info. */
         m_create_process_info.process_id = process_id.value;
