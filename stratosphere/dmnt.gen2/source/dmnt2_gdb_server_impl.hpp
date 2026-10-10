@@ -55,6 +55,39 @@ namespace ams::dmnt {
             bool m_watchpoint_rearm_pending{false};
             bool m_instruction_rearm_pending{false};
             bool m_continue_after_step{false};
+            /* FIELD_WATCH: the whole of [m_fw_lo, m_fw_hi) is covered by up to
+             * four aligned power-of-two watchpoints. A hit lifts the block that
+             * fired (m_fw_lifted, a mask over m_fw_blocks), lets the access
+             * through to a hardware breakpoint at m_fw_step_pc and puts the
+             * block back there. */
+            struct FieldWatchBlock { u64 address; u64 size; };
+            enum class FieldWatchState : u8 {
+                None,
+                Step,  /* only the thread that hit runs, to m_fw_step_pc */
+                Wait,  /* every thread runs; m_fw_step_pc or a timeout ends it */
+            };
+            enum class FieldWatchResume : u8 { All, Thread };
+            bool m_fw_active{false};
+            bool m_fw_read{false};
+            bool m_fw_write{false};
+            bool m_fw_excl{false};
+            u8 m_fw_excl_rs{0};
+            u8 m_fw_lifted{0};
+            FieldWatchState m_fw_state{FieldWatchState::None};
+            u32 m_fw_block_count{0};
+            FieldWatchBlock m_fw_blocks[4]{};
+            u64 m_fw_lo{0};
+            u64 m_fw_hi{0};
+            u64 m_fw_step_pc{0};
+            os::Tick m_fw_state_start{};
+            void FieldWatchSet();
+            void FieldWatchClear();
+            void FieldWatchLift(u64 address);
+            void FieldWatchRearm();
+            void FieldWatchTick();
+            bool FieldWatchCovers(u64 address) const;
+            FieldWatchResume FieldWatchOnAccess(u64 thread_id, u64 address);
+            void FieldWatchOnStep(u64 thread_id);
         public:
             GdbServerImpl(int socket, void *thread_stack, size_t stack_size);
             ~GdbServerImpl();

@@ -116,6 +116,7 @@ namespace ams::dmnt {
                 m_watch_data.gen2loop_on = m_session.IsValid() ? 1 : g_gen2_server_on;
 
                 if (m_watch_data.attached) {
+                    this->FieldWatchTick();
                     m_watch_data.bp_hit = (m_debug_process.GetStatus() == DebugProcess::ProcessStatus_DebugBreak);
                     if (m_watch_data.bp_hit) {
                         /* Not while a command is pending: the client may have picked
@@ -254,6 +255,9 @@ namespace ams::dmnt {
                     if (!this->HasDebugProcess()) {
                         Gen2Attach();
                         ForgetWatchAfterAttach();
+                        m_fw_active = false;
+                        m_fw_state = FieldWatchState::None;
+                        m_fw_step_pc = 0;
                     }
                     {
                         std::scoped_lock lk(g_watch_data_lock);
@@ -271,6 +275,9 @@ namespace ams::dmnt {
                     if (!this->HasDebugProcess()) {
                         Gen2Attach();
                         ForgetWatchAfterAttach();
+                        m_fw_active = false;
+                        m_fw_state = FieldWatchState::None;
+                        m_fw_step_pc = 0;
                     }
                     {
                         std::scoped_lock lk(g_watch_data_lock);
@@ -1888,6 +1895,12 @@ namespace ams::dmnt {
                                              g_gen2_request_event.Signal();
                                          }
                                      } else if (is_instr) {
+                                        if (m_fw_step_pc != 0 && address == m_fw_step_pc) {
+                                            this->FieldWatchOnStep(thread_id);
+                                            _wd_lk.unlock();
+                                            m_debug_process.Continue();
+                                            break;
+                                        }
                                         if (address == m_watch_data.next_pc || address == m_watch_data.address) {
                                             m_watch_data.intercepted = true;
                                             if (R_FAILED(m_debug_process.ClearHardwareBreakPoint(address, (address == m_watch_data.next_pc) ? 4 : m_watch_data.size))) {
@@ -2084,6 +2097,19 @@ namespace ams::dmnt {
                                             }
                                         }
                                     } else {
+                                        /* FIELD_WATCH owns its blocks, and with no GDB
+                                         * client every data hit there is. */
+                                        if (m_fw_active && (!m_session.IsValid() || this->FieldWatchCovers(address))) {
+                                            const auto resume = this->FieldWatchOnAccess(thread_id, address);
+                                            _wd_lk.unlock();
+                                            CheckRateLimitAndSleep();
+                                            if (resume == FieldWatchResume::Thread) {
+                                                m_debug_process.Continue(thread_id);
+                                            } else {
+                                                m_debug_process.Continue();
+                                            }
+                                            break;
+                                        }
                                         bool read = false, write = false;
                                         const char *type = "watch";
                                         /* GetWatchPointInfo iterates the active WP slots and
@@ -3303,6 +3329,300 @@ namespace ams::dmnt {
         }
     }
 
+    namespace {
+
+        /* The fewest-bytes-over cover of [lo, hi) (both qword aligned) this
+         * split finds with at most `budget` watchpoints, each a power-of-two
+         * size at an address aligned to it. One block always exists; more only
+         * trim how much of the neighbouring memory is watched as well. */
+        template <typename Block>
+        u32 BuildFieldWatchCover(Block *out, u32 budget, u64 lo, u64 hi) {
+            u64 size = 8;
+            while (util::AlignDown(lo, size) + size < hi) {
+                size <<= 1;
+            }
+            const u64 base = util::AlignDown(lo, size);
+            if (budget <= 1 || size == 8 || (base == lo && base + size == hi)) {
+                out[0] = { base, size };
+                return 1;
+            }
+            /* size is the smallest that holds the range, so its midpoint falls
+             * strictly inside it. */
+            const u64 mid = base + size / 2;
+            const u32 left = BuildFieldWatchCover(out, budget / 2, lo, mid);
+            return left + BuildFieldWatchCover(out + left, budget - left, mid, hi);
+        }
+
+        constexpr u32 DcZva = 0xD50B7420;
+
+        constexpr bool IsExclusive(u32 insn)      { return (insn & 0x3F800000) == 0x08000000; }
+        constexpr bool IsStoreExclusive(u32 insn) { return (insn & 0x3FC00000) == 0x08000000; }
+
+        /* Bytes the load or store at a hit touches, from the reported address up. */
+        u32 FieldWatchAccessWidth(u32 insn) {
+            if ((insn & 0xFFFFFFE0) == DcZva) {
+                return 64;
+            }
+            if ((insn & 0x3A000000) == 0x28000000) {
+                /* Pair. */
+                if (insn & (1u << 26)) {
+                    return 2 * (4u << (insn >> 30));
+                }
+                return (insn >> 31) ? 16 : 8;
+            }
+            if ((insn & 0x3F000000) == 0x08000000) {
+                /* Exclusive and ordered. */
+                const u32 width = 1u << (insn >> 30);
+                return (IsExclusive(insn) && (insn & (1u << 21))) ? 2 * width : width;
+            }
+            if ((insn & 0x3A000000) == 0x38000000) {
+                /* Register, every addressing mode. */
+                if ((insn & (1u << 26)) && (insn & (1u << 23)) && (insn >> 30) == 0) {
+                    return 16;
+                }
+                return 1u << (insn >> 30);
+            }
+            return 1;
+        }
+
+    }
+
+    void GdbServerImpl::FieldWatchSet() {
+        m_watch_data.count = 0;
+        std::memset(std::addressof(m_watch_data.fromU), 0, sizeof(m_watch_data.fromU));
+
+        const u64 size = static_cast<u64>(m_watch_data.size);
+        if (m_watch_data.size <= 0 || size > field_watch_max_size || !(m_watch_data.read || m_watch_data.write)) {
+            m_watch_data.failed = 1;
+            return;
+        }
+
+        m_fw_lo         = m_watch_data.address;
+        m_fw_hi         = m_watch_data.address + size;
+        m_fw_read       = m_watch_data.read;
+        m_fw_write      = m_watch_data.write;
+        m_fw_lifted     = 0;
+        m_fw_state      = FieldWatchState::None;
+        m_fw_step_pc    = 0;
+        m_fw_block_count = BuildFieldWatchCover(m_fw_blocks, util::size(m_fw_blocks), util::AlignDown(m_fw_lo, 8), util::AlignUp(m_fw_hi, 8));
+
+        for (u32 i = 0; i < m_fw_block_count; i++) {
+            if (R_FAILED(m_debug_process.SetWatchPoint(m_fw_blocks[i].address, m_fw_blocks[i].size, m_fw_read, m_fw_write))) {
+                /* Out of watchpoints (a GDB client holds one) or a size the
+                 * hardware refuses: a part cover would read as fields never
+                 * accessed, so take none. */
+                for (u32 j = 0; j < i; j++) {
+                    static_cast<void>(m_debug_process.ClearWatchPoint(m_fw_blocks[j].address, m_fw_blocks[j].size));
+                }
+                m_fw_block_count = 0;
+                m_watch_data.failed = 1;
+                return;
+            }
+        }
+        m_fw_active = true;
+    }
+
+    /* Leaves m_watch_data alone: the bitmap is the result, and the client reads
+     * it after the watch has gone. */
+    void GdbServerImpl::FieldWatchClear() {
+        if (m_debug_process.IsValid()) {
+            if (m_fw_step_pc != 0) {
+                static_cast<void>(m_debug_process.ClearHardwareBreakPoint(m_fw_step_pc, sizeof(u32)));
+            }
+            for (u32 i = 0; i < m_fw_block_count; i++) {
+                if ((m_fw_lifted & (1u << i)) == 0) {
+                    static_cast<void>(m_debug_process.ClearWatchPoint(m_fw_blocks[i].address, m_fw_blocks[i].size));
+                }
+            }
+            /* The other threads are held while one steps to m_fw_step_pc, and
+             * that breakpoint has just gone. */
+            if (m_fw_state == FieldWatchState::Step) {
+                static_cast<void>(m_debug_process.Continue());
+            }
+        }
+        m_fw_active      = false;
+        m_fw_block_count = 0;
+        m_fw_lifted      = 0;
+        m_fw_step_pc     = 0;
+        m_fw_state       = FieldWatchState::None;
+    }
+
+    bool GdbServerImpl::FieldWatchCovers(u64 address) const {
+        /* The reported address is the lowest byte the access touched, which for
+         * one that starts short of a block is below it. */
+        for (u32 i = 0; i < m_fw_block_count; i++) {
+            if (m_fw_blocks[i].address <= address + 16 && address < m_fw_blocks[i].address + m_fw_blocks[i].size) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void GdbServerImpl::FieldWatchLift(u64 address) {
+        u8 lift = 0;
+        for (u32 i = 0; i < m_fw_block_count; i++) {
+            if (m_fw_blocks[i].address <= address && address < m_fw_blocks[i].address + m_fw_blocks[i].size) {
+                lift = 1u << i;
+            }
+        }
+        if (lift == 0) {
+            lift = (1u << m_fw_block_count) - 1;
+        }
+        for (u32 i = 0; i < m_fw_block_count; i++) {
+            if ((lift & (1u << i)) && (m_fw_lifted & (1u << i)) == 0) {
+                if (R_FAILED(m_debug_process.ClearWatchPoint(m_fw_blocks[i].address, m_fw_blocks[i].size))) {
+                    m_watch_data.failed = 3;
+                }
+                m_fw_lifted |= (1u << i);
+            }
+        }
+    }
+
+    void GdbServerImpl::FieldWatchRearm() {
+        if (m_fw_step_pc != 0) {
+            static_cast<void>(m_debug_process.ClearHardwareBreakPoint(m_fw_step_pc, sizeof(u32)));
+            m_fw_step_pc = 0;
+        }
+        for (u32 i = 0; i < m_fw_block_count; i++) {
+            if (m_fw_lifted & (1u << i)) {
+                if (R_FAILED(m_debug_process.SetWatchPoint(m_fw_blocks[i].address, m_fw_blocks[i].size, m_fw_read, m_fw_write))) {
+                    m_watch_data.failed = 4;
+                }
+            }
+        }
+        m_fw_lifted = 0;
+        m_fw_state  = FieldWatchState::None;
+    }
+
+    /* A wait whose breakpoint the game never reached (the exclusive sequence
+     * branched away) would leave a block unwatched for good, and a step whose
+     * thread never arrived would leave the game held. */
+    void GdbServerImpl::FieldWatchTick() {
+        if (!m_fw_active || m_fw_state == FieldWatchState::None) {
+            return;
+        }
+        const auto elapsed = os::ConvertToTimeSpan(os::GetSystemTick() - m_fw_state_start);
+        if (m_fw_state == FieldWatchState::Wait && elapsed > TimeSpan::FromMilliSeconds(50)) {
+            this->FieldWatchRearm();
+        } else if (m_fw_state == FieldWatchState::Step && elapsed > TimeSpan::FromMilliSeconds(500)) {
+            this->FieldWatchRearm();
+            static_cast<void>(m_debug_process.Continue());
+        }
+    }
+
+    GdbServerImpl::FieldWatchResume GdbServerImpl::FieldWatchOnAccess(u64 thread_id, u64 address) {
+        m_watch_data.intercepted = true;
+
+        /* Every thread was running: end that wait first, there is one step slot. */
+        if (m_fw_state == FieldWatchState::Wait) {
+            this->FieldWatchRearm();
+        }
+
+        svc::ThreadContext ctx;
+        if (R_FAILED(m_debug_process.GetThreadContext(std::addressof(ctx), thread_id, svc::ThreadContextFlag_Control))) {
+            /* No PC to step to: let the access through unwatched, the tick
+             * puts the block back. */
+            m_watch_data.failed = 1;
+            this->FieldWatchLift(address);
+            if (m_fw_state == FieldWatchState::Step) {
+                return FieldWatchResume::Thread;
+            }
+            m_fw_state       = FieldWatchState::Wait;
+            m_fw_state_start = os::GetSystemTick();
+            return FieldWatchResume::All;
+        }
+
+        u32 insn = 0;
+        static_cast<void>(m_debug_process.ReadMemory(std::addressof(insn), ctx.pc, sizeof(insn)));
+
+        /* Record it. */
+        {
+            u64 begin = address;
+            const u64 width = FieldWatchAccessWidth(insn);
+            if (width == 64) {
+                begin = util::AlignDown(address, 64);
+            }
+            const u64 end = std::min(begin + width, m_fw_hi);
+            u8 *bits = reinterpret_cast<u8 *>(std::addressof(m_watch_data.fromU));
+            for (u64 a = std::max(begin, m_fw_lo); a < end; a++) {
+                bits[(a - m_fw_lo) >> 3] |= static_cast<u8>(1u << ((a - m_fw_lo) & 7));
+            }
+        }
+
+        m_watch_data.total_trigger++;
+        if (m_watch_data.total_trigger >= m_watch_data.max_trigger) {
+            this->FieldWatchClear();
+            return FieldWatchResume::All;
+        }
+
+        this->FieldWatchLift(address);
+
+        /* A step is already on its way: this is the same access reaching a
+         * second block, or a thread whose hit was queued behind it. Either runs
+         * on to the breakpoint that is set. */
+        if (m_fw_state == FieldWatchState::Step) {
+            return FieldWatchResume::Thread;
+        }
+
+        /* The stop itself clears the exclusive monitor, so a store-exclusive
+         * that hit fails and its loop retries: watched again it would hit and
+         * fail for ever. FieldWatchOnStep lets the retry through. A
+         * load-exclusive runs unwatched to past the store it pairs with. */
+        m_fw_step_pc = ctx.pc + 4;
+        m_fw_state   = FieldWatchState::Step;
+        m_fw_excl    = false;
+        if (IsStoreExclusive(insn)) {
+            m_fw_excl    = true;
+            m_fw_excl_rs = (insn >> 16) & 0x1F;
+        } else if (IsExclusive(insn)) {
+            u32 next[16];
+            if (R_SUCCEEDED(m_debug_process.ReadMemory(next, ctx.pc + 4, sizeof(next)))) {
+                for (size_t i = 0; i < util::size(next); i++) {
+                    if (IsStoreExclusive(next[i])) {
+                        /* A branch may leave the sequence before the store, so
+                         * the other threads cannot be held for this one. */
+                        m_fw_step_pc = ctx.pc + 4 + (i + 1) * sizeof(u32);
+                        m_fw_state   = FieldWatchState::Wait;
+                        break;
+                    }
+                }
+            }
+        }
+        m_fw_state_start = os::GetSystemTick();
+
+        if (R_FAILED(m_debug_process.SetHardwareBreakPoint(m_fw_step_pc, sizeof(u32), false))) {
+            /* Nowhere to put the block back from: run the access unwatched and
+             * let the tick restore it. */
+            m_watch_data.failed = 2;
+            m_fw_step_pc = 0;
+            m_fw_state   = FieldWatchState::Wait;
+        }
+        return m_fw_state == FieldWatchState::Step ? FieldWatchResume::Thread : FieldWatchResume::All;
+    }
+
+    /* The breakpoint at m_fw_step_pc. The caller continues every thread. */
+    void GdbServerImpl::FieldWatchOnStep(u64 thread_id) {
+        m_watch_data.intercepted = true;
+
+        if (m_fw_state == FieldWatchState::Step && m_fw_excl && m_fw_excl_rs != 31) {
+            svc::ThreadContext ctx;
+            if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(ctx), thread_id, svc::ThreadContextFlag_General)) && static_cast<u32>(ctx.r[m_fw_excl_rs]) != 0) {
+                /* The store failed. Its retry runs unwatched, to the
+                 * instruction after the loop's branch back. */
+                static_cast<void>(m_debug_process.ClearHardwareBreakPoint(m_fw_step_pc, sizeof(u32)));
+                m_fw_excl        = false;
+                m_fw_step_pc    += sizeof(u32);
+                m_fw_state       = FieldWatchState::Wait;
+                m_fw_state_start = os::GetSystemTick();
+                if (R_FAILED(m_debug_process.SetHardwareBreakPoint(m_fw_step_pc, sizeof(u32), false))) {
+                    m_fw_step_pc = 0;
+                }
+                return;
+            }
+        }
+        this->FieldWatchRearm();
+    }
+
     void GdbServerImpl::setw() {
         char *reply_cur = m_buffer;
         char *reply_end = m_buffer + sizeof(m_buffer);
@@ -3311,6 +3631,10 @@ namespace ams::dmnt {
         if (!m_debug_process.IsValid()) {
             m_watch_data.failed = 1;
             AppendReplyFormat(reply_cur, reply_end, "Unable to set watch, no debug process attached\n");
+            return;
+        }
+        if (m_watch_data.x30_catch_type == FIELD_WATCH) {
+            this->FieldWatchSet();
             return;
         }
         if ((m_watch_data.read || m_watch_data.write) && m_debug_process.IsValidWatchPoint(m_watch_data.address, m_watch_data.size)) {
@@ -3350,6 +3674,11 @@ namespace ams::dmnt {
         char *reply_cur = m_buffer;
         char *reply_end = m_buffer + sizeof(m_buffer);
         const bool has_debug_process = m_debug_process.IsValid();
+        if (m_fw_active || m_fw_state != FieldWatchState::None) {
+            this->FieldWatchClear();
+            m_watch_data.address = 0;
+            return;
+        }
         if (has_debug_process && m_watch_data.next_pc != 0 && m_watch_data.next_pc != 0x55AA55AA) {
             m_debug_process.ClearHardwareBreakPoint(m_watch_data.next_pc, sizeof(u32));
             m_watch_data.next_pc = 0;

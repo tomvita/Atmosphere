@@ -1,7 +1,7 @@
 #define max_watch_buffer 0x200
 #define max_call_stack 5
 #define stack_check_size 100
-#define GEN2_VERSION "v0.16"
+#define GEN2_VERSION "v0.17"
         typedef struct {
             u64 address:64;
             u32 count:32;
@@ -65,7 +65,13 @@
             EXCLUSIVE_SEARCH,
             UNIQUE_SEARCH,
             END_OF_TYPE,
+            // v0.17, after END_OF_TYPE so the call-site source cycle never lands on it:
+            // watch every byte of [next_address, next_address + size) and record
+            // which were accessed, one bit per byte in fromU (count stays 0).
+            FIELD_WATCH,
         } NX_PACKED;
+// The largest instance a FIELD_WATCH bitmap holds, in bytes.
+#define field_watch_max_size (max_watch_buffer * sizeof(m_from_t) * 8)
         typedef struct {
             bool execute = false, done = false;
             gen2_command command = SETW;
