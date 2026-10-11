@@ -1779,6 +1779,17 @@ namespace ams::dmnt {
         if (flags == 0) {
             return true;
         }
+        if ((flags & BP_FILTER_REGISTER) != 0) {
+            const u8 reg = m_watch_data.Register;
+            const u64 value = reg < 29 ? thread_context.r[reg] : reg == 29 ? thread_context.fp : reg == 30 ? thread_context.lr : thread_context.sp;
+            if (value != m_watch_data.Register_match_value) {
+                return false;
+            }
+            /* The stack is only read when a part of it has to match too. */
+            if ((flags & ~BP_FILTER_REGISTER) == 0) {
+                return true;
+            }
+        }
         const m_from_stack_t entry = get_from_stack(thread_context, true);
         if ((flags & BP_FILTER_X30) != 0 && static_cast<u32>((entry.address >> 39) & 0x1FFFFFF) != m_watch_data.bp_filter_call_from) {
             return false;
@@ -3847,6 +3858,7 @@ namespace ams::dmnt {
             out[i].method = m_mw[i].method;
             out[i].caller = m_mw[i].caller;
             out[i].state  = m_mw[i].state;
+            out[i].self   = m_mw[i].self;
         }
     }
 
@@ -3860,6 +3872,7 @@ namespace ams::dmnt {
             MethodWatchEntry &e = m_mw[i];
             e.method = in[i].method;
             e.caller = 0;
+            e.self   = 0;
             e.state  = METHOD_NOT_SET;
             const u64 address = m_mw_main + e.method;
             /* One already there is somebody else's breakpoint: not ours to take off. */
@@ -3914,10 +3927,14 @@ namespace ams::dmnt {
                 }
                 e.state = METHOD_CALLED;
                 svc::ThreadContext ctx;
-                if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(ctx), thread_id, svc::ThreadContextFlag_Control))) {
+                /* x0 with the return address: at a method's first instruction it
+                 * still holds the first argument, which for an instance method
+                 * is the object. */
+                if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(ctx), thread_id, svc::ThreadContextFlag_Control | svc::ThreadContextFlag_General))) {
                     if (ctx.lr >= m_mw_main && ctx.lr - m_mw_main < (1ul << 30)) {
                         e.caller = static_cast<u32>((ctx.lr - m_mw_main) >> 2);
                     }
+                    e.self = ctx.r[0];
                 }
                 if (m_mw_active && m_watch_data.x30_catch_type == METHOD_WATCH) {
                     m_watch_data.total_trigger++;
@@ -3925,6 +3942,7 @@ namespace ams::dmnt {
                     out[i].method = e.method;
                     out[i].caller = e.caller;
                     out[i].state  = e.state;
+                    out[i].self   = e.self;
                 }
             }
             return true;

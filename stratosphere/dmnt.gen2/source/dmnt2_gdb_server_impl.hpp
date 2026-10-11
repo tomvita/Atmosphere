@@ -94,8 +94,8 @@ namespace ams::dmnt {
              * game with nobody to answer for it crashes the game. It outlives
              * the watch (m_mw_active) so a hit that was already on its way
              * when the watch ended is still recognised. */
-            struct MethodWatchEntry { u32 method; u32 original; u32 caller; u8 state; };
-            static constexpr size_t MethodWatchMax = 768;
+            struct MethodWatchEntry { u32 method; u32 original; u32 caller; u8 state; u64 self; };
+            static constexpr size_t MethodWatchMax = 384;
             MethodWatchEntry m_mw[MethodWatchMax]{};
             u32 m_mw_count{0};
             u64 m_mw_main{0};

@@ -82,6 +82,7 @@
             u32 method;       // the method's first instruction, as an offset from main_start
             u32 caller : 28;  // (return address - main_start) >> 2 at its first call; 0 until then, or outside main
             u32 state : 4;    // METHOD_*
+            u64 self;         // x0 at that call: for an instance method, the object it was called on
         } NX_PACKED m_method_t;
         enum {
             METHOD_ARMED,        // waiting: not called so far
@@ -167,6 +168,10 @@
         } m_watch_data_t;
 #define BP_FILTER_X30 1u
 #define BP_FILTER_STACK(slot) (2u << (slot))
+// Break only when register `Register` (0-30) holds `Register_match_value`: at a
+// method's first instruction X0 is the object it was called on, so this is a
+// break on one instance.
+#define BP_FILTER_REGISTER 0x100u
 /* The block as it was before the Break and Trace fields. Breeze stores exactly
  * this much in its saved results, so the fields after it must not move. */
 #define GEN2_SAVED_SIZE 7232
