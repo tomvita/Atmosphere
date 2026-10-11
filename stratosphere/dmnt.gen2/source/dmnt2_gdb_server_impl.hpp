@@ -89,6 +89,21 @@ namespace ams::dmnt {
             void FieldWatchSet();
             u32 FieldWatchBuildCover(FieldWatchBlock *out) const;
             u32 FieldWatchBuildSweep(FieldWatchBlock *out) const;
+            /* METHOD_WATCH. The table is this object's own: m_watch_data is
+             * the client's to overwrite, and a break instruction left in the
+             * game with nobody to answer for it crashes the game. It outlives
+             * the watch (m_mw_active) so a hit that was already on its way
+             * when the watch ended is still recognised. */
+            struct MethodWatchEntry { u32 method; u32 original; u32 caller; u8 state; };
+            static constexpr size_t MethodWatchMax = 768;
+            MethodWatchEntry m_mw[MethodWatchMax]{};
+            u32 m_mw_count{0};
+            u64 m_mw_main{0};
+            bool m_mw_active{false};
+            void MethodWatchSet();
+            void MethodWatchClear();
+            void MethodWatchSync();
+            bool MethodWatchOnBreak(u64 thread_id, u64 address);
             void FieldWatchClear();
             void FieldWatchLift(u64 address);
             void FieldWatchRearm();

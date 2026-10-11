@@ -262,6 +262,9 @@ namespace ams::dmnt {
                         m_fw_active = false;
                         m_fw_state = FieldWatchState::None;
                         m_fw_step_pc = 0;
+                        /* Another process: nothing of the table is in it. */
+                        m_mw_active = false;
+                        m_mw_count = 0;
                     }
                     {
                         std::scoped_lock lk(g_watch_data_lock);
@@ -282,6 +285,9 @@ namespace ams::dmnt {
                         m_fw_active = false;
                         m_fw_state = FieldWatchState::None;
                         m_fw_step_pc = 0;
+                        /* Another process: nothing of the table is in it. */
+                        m_mw_active = false;
+                        m_mw_count = 0;
                     }
                     {
                         std::scoped_lock lk(g_watch_data_lock);
@@ -2348,6 +2354,17 @@ namespace ams::dmnt {
                                 {
                                     signal            = GdbSignal_IllegalInstruction;
 
+                                    /* A method watch's break: the instruction is back, run on. */
+                                    if (m_mw_count != 0) {
+                                        std::unique_lock mw_lk(g_watch_data_lock);
+                                        if (this->MethodWatchOnBreak(thread_id, d.info.exception.address)) {
+                                            mw_lk.unlock();
+                                            CheckRateLimitAndSleep();
+                                            m_debug_process.Continue();
+                                            break;
+                                        }
+                                    }
+
                                     uintptr_t address = d.info.exception.address;
                                     const u32 insn    = d.info.exception.specific.undefined_instruction.insn;
                                     u32 new_insn      = 0;
@@ -3817,6 +3834,104 @@ namespace ams::dmnt {
         this->FieldWatchRearm();
     }
 
+    namespace {
+        /* What the software breakpoints write: an undefined instruction. */
+        constexpr u32 MethodWatchBreak = 0xE7FFFFFF;
+    }
+
+    /* The table as the client sees it. */
+    void GdbServerImpl::MethodWatchSync() {
+        static_assert(MethodWatchMax == max_method_watch);
+        m_method_t *out = reinterpret_cast<m_method_t *>(std::addressof(m_watch_data.fromU));
+        for (u32 i = 0; i < m_mw_count; i++) {
+            out[i].method = m_mw[i].method;
+            out[i].caller = m_mw[i].caller;
+            out[i].state  = m_mw[i].state;
+        }
+    }
+
+    void GdbServerImpl::MethodWatchSet() {
+        const m_method_t *in = reinterpret_cast<const m_method_t *>(std::addressof(m_watch_data.fromU));
+        const u32 count = static_cast<u32>(std::clamp<int>(m_watch_data.size, 0, MethodWatchMax));
+        m_watch_data.count = 0;
+        m_mw_main  = m_watch_data.main_start;
+        m_mw_count = count;
+        for (u32 i = 0; i < count; i++) {
+            MethodWatchEntry &e = m_mw[i];
+            e.method = in[i].method;
+            e.caller = 0;
+            e.state  = METHOD_NOT_SET;
+            const u64 address = m_mw_main + e.method;
+            /* One already there is somebody else's breakpoint: not ours to take off. */
+            if (R_SUCCEEDED(m_debug_process.ReadMemory(std::addressof(e.original), address, sizeof(u32))) && e.original != MethodWatchBreak) {
+                if (R_SUCCEEDED(m_debug_process.WriteMemory(std::addressof(MethodWatchBreak), address, sizeof(u32)))) {
+                    e.state = METHOD_ARMED;
+                }
+            }
+        }
+        m_mw_active = true;
+        this->MethodWatchSync();
+    }
+
+    /* Takes the break off every method not called. One that no longer holds
+     * our break was rewritten by something else - a cheat hooking that entry
+     * does it twelve times a second - so whether it was called is not known,
+     * and the instruction there now is not ours to replace. */
+    void GdbServerImpl::MethodWatchClear() {
+        if (m_mw_active && m_debug_process.IsValid()) {
+            for (u32 i = 0; i < m_mw_count; i++) {
+                MethodWatchEntry &e = m_mw[i];
+                if (e.state != METHOD_ARMED) {
+                    continue;
+                }
+                const u64 address = m_mw_main + e.method;
+                u32 now = 0;
+                if (R_SUCCEEDED(m_debug_process.ReadMemory(std::addressof(now), address, sizeof(u32))) && now == MethodWatchBreak) {
+                    static_cast<void>(m_debug_process.WriteMemory(std::addressof(e.original), address, sizeof(u32)));
+                } else {
+                    e.state = METHOD_OVERWRITTEN;
+                }
+            }
+            if (m_watch_data.x30_catch_type == METHOD_WATCH) {
+                this->MethodWatchSync();
+            }
+        }
+        m_mw_active = false;
+    }
+
+    /* An undefined instruction at `address`: one of ours? Then the caller continues the game. */
+    bool GdbServerImpl::MethodWatchOnBreak(u64 thread_id, u64 address) {
+        for (u32 i = 0; i < m_mw_count; i++) {
+            MethodWatchEntry &e = m_mw[i];
+            if (m_mw_main + e.method != address) {
+                continue;
+            }
+            /* Not armed: another thread's hit put the instruction back while
+             * this one was on its way. It runs the real instruction now. */
+            if (e.state == METHOD_ARMED) {
+                if (R_FAILED(m_debug_process.WriteMemory(std::addressof(e.original), address, sizeof(u32)))) {
+                    m_watch_data.failed = 5;
+                }
+                e.state = METHOD_CALLED;
+                svc::ThreadContext ctx;
+                if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(ctx), thread_id, svc::ThreadContextFlag_Control))) {
+                    if (ctx.lr >= m_mw_main && ctx.lr - m_mw_main < (1ul << 30)) {
+                        e.caller = static_cast<u32>((ctx.lr - m_mw_main) >> 2);
+                    }
+                }
+                if (m_mw_active && m_watch_data.x30_catch_type == METHOD_WATCH) {
+                    m_watch_data.total_trigger++;
+                    m_method_t *out = reinterpret_cast<m_method_t *>(std::addressof(m_watch_data.fromU));
+                    out[i].method = e.method;
+                    out[i].caller = e.caller;
+                    out[i].state  = e.state;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
     void GdbServerImpl::setw() {
         char *reply_cur = m_buffer;
         char *reply_end = m_buffer + sizeof(m_buffer);
@@ -3829,6 +3944,10 @@ namespace ams::dmnt {
         }
         if (m_watch_data.x30_catch_type == FIELD_WATCH || m_watch_data.x30_catch_type == FIELD_SWEEP) {
             this->FieldWatchSet();
+            return;
+        }
+        if (m_watch_data.x30_catch_type == METHOD_WATCH) {
+            this->MethodWatchSet();
             return;
         }
         if ((m_watch_data.read || m_watch_data.write) && m_debug_process.IsValidWatchPoint(m_watch_data.address, m_watch_data.size)) {
@@ -3868,6 +3987,11 @@ namespace ams::dmnt {
         char *reply_cur = m_buffer;
         char *reply_end = m_buffer + sizeof(m_buffer);
         const bool has_debug_process = m_debug_process.IsValid();
+        if (m_mw_active) {
+            this->MethodWatchClear();
+            m_watch_data.address = 0;
+            return;
+        }
         if (m_fw_active || m_fw_state != FieldWatchState::None) {
             this->FieldWatchClear();
             m_watch_data.address = 0;

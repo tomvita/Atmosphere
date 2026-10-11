@@ -73,7 +73,23 @@
             // four exact watchpoints at a time, moved round the rest. The game
             // runs at speed, and an access outside the four of the moment is missed.
             FIELD_SWEEP,
+            // Which methods are ever called: fromU holds `size` m_method_t entries.
+            // A break instruction goes on each method's first instruction and
+            // comes off at its first hit, so a method stops the game once.
+            METHOD_WATCH,
         } NX_PACKED;
+        typedef struct {
+            u32 method;       // the method's first instruction, as an offset from main_start
+            u32 caller : 28;  // (return address - main_start) >> 2 at its first call; 0 until then, or outside main
+            u32 state : 4;    // METHOD_*
+        } NX_PACKED m_method_t;
+        enum {
+            METHOD_ARMED,        // waiting: not called so far
+            METHOD_CALLED,
+            METHOD_OVERWRITTEN,  // something else rewrote the instruction (a cheat's hook): unknown
+            METHOD_NOT_SET,      // the break could not be put there
+        };
+#define max_method_watch ((int)(max_watch_buffer * sizeof(m_from_t) / sizeof(m_method_t)))
 // The largest instance a FIELD_WATCH bitmap holds, in bytes.
 #define field_watch_max_size (max_watch_buffer * sizeof(m_from_t) * 8)
         typedef struct {
