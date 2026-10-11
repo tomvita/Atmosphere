@@ -71,6 +71,12 @@ namespace ams::dmnt {
             bool m_fw_read{false};
             bool m_fw_write{false};
             bool m_fw_excl{false};
+            bool m_fw_dirty{false};
+            /* FIELD_SWEEP: the blocks are exact pieces of what is still unseen,
+             * four of them from piece m_fw_sweep_cursor on, moved on by the tick. */
+            bool m_fw_sweep{false};
+            u32 m_fw_sweep_cursor{0};
+            os::Tick m_fw_sweep_start{};
             u8 m_fw_excl_rs{0};
             u8 m_fw_lifted{0};
             FieldWatchState m_fw_state{FieldWatchState::None};
@@ -81,6 +87,8 @@ namespace ams::dmnt {
             u64 m_fw_step_pc{0};
             os::Tick m_fw_state_start{};
             void FieldWatchSet();
+            u32 FieldWatchBuildCover(FieldWatchBlock *out) const;
+            u32 FieldWatchBuildSweep(FieldWatchBlock *out) const;
             void FieldWatchClear();
             void FieldWatchLift(u64 address);
             void FieldWatchRearm();

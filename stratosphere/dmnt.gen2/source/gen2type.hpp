@@ -69,6 +69,10 @@
             // watch every byte of [next_address, next_address + size) and record
             // which were accessed, one bit per byte in fromU (count stays 0).
             FIELD_WATCH,
+            // The same, for the bytes the bitmap sent with it does not mark yet:
+            // four exact watchpoints at a time, moved round the rest. The game
+            // runs at speed, and an access outside the four of the moment is missed.
+            FIELD_SWEEP,
         } NX_PACKED;
 // The largest instance a FIELD_WATCH bitmap holds, in bytes.
 #define field_watch_max_size (max_watch_buffer * sizeof(m_from_t) * 8)

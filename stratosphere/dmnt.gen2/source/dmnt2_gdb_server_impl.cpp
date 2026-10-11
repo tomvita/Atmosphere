@@ -41,6 +41,10 @@ namespace ams::dmnt {
          */
         os::Event g_gen2_request_event(os::EventClearMode_AutoClear);
 
+        /* Set while a field sweep runs: gen2_loop then ticks often enough to
+         * move the sweep's watchpoints on. */
+        std::atomic<bool> g_gen2_fast_tick = false;
+
         /* 0 = idle, 1 = IPC client connected, 2 = raw mode (no GDB session
          * but an external client may be talking via dmnt:cht IPC). This
          * used to be a member of GdbServerImpl, but it needs to outlive
@@ -3331,28 +3335,6 @@ namespace ams::dmnt {
 
     namespace {
 
-        /* The fewest-bytes-over cover of [lo, hi) (both qword aligned) this
-         * split finds with at most `budget` watchpoints, each a power-of-two
-         * size at an address aligned to it. One block always exists; more only
-         * trim how much of the neighbouring memory is watched as well. */
-        template <typename Block>
-        u32 BuildFieldWatchCover(Block *out, u32 budget, u64 lo, u64 hi) {
-            u64 size = 8;
-            while (util::AlignDown(lo, size) + size < hi) {
-                size <<= 1;
-            }
-            const u64 base = util::AlignDown(lo, size);
-            if (budget <= 1 || size == 8 || (base == lo && base + size == hi)) {
-                out[0] = { base, size };
-                return 1;
-            }
-            /* size is the smallest that holds the range, so its midpoint falls
-             * strictly inside it. */
-            const u64 mid = base + size / 2;
-            const u32 left = BuildFieldWatchCover(out, budget / 2, lo, mid);
-            return left + BuildFieldWatchCover(out + left, budget - left, mid, hi);
-        }
-
         constexpr u32 DcZva = 0xD50B7420;
 
         constexpr bool IsExclusive(u32 insn)      { return (insn & 0x3F800000) == 0x08000000; }
@@ -3388,8 +3370,12 @@ namespace ams::dmnt {
     }
 
     void GdbServerImpl::FieldWatchSet() {
+        /* A sweep goes on from the bitmap the client sent. */
+        m_fw_sweep = m_watch_data.x30_catch_type == FIELD_SWEEP;
         m_watch_data.count = 0;
-        std::memset(std::addressof(m_watch_data.fromU), 0, sizeof(m_watch_data.fromU));
+        if (!m_fw_sweep) {
+            std::memset(std::addressof(m_watch_data.fromU), 0, sizeof(m_watch_data.fromU));
+        }
 
         const u64 size = static_cast<u64>(m_watch_data.size);
         if (m_watch_data.size <= 0 || size > field_watch_max_size || !(m_watch_data.read || m_watch_data.write)) {
@@ -3404,7 +3390,10 @@ namespace ams::dmnt {
         m_fw_lifted     = 0;
         m_fw_state      = FieldWatchState::None;
         m_fw_step_pc    = 0;
-        m_fw_block_count = BuildFieldWatchCover(m_fw_blocks, util::size(m_fw_blocks), util::AlignDown(m_fw_lo, 8), util::AlignUp(m_fw_hi, 8));
+        m_fw_dirty      = false;
+        m_fw_sweep_cursor = 0;
+        m_fw_sweep_start  = os::GetSystemTick();
+        m_fw_block_count = this->FieldWatchBuildCover(m_fw_blocks);
 
         for (u32 i = 0; i < m_fw_block_count; i++) {
             if (R_FAILED(m_debug_process.SetWatchPoint(m_fw_blocks[i].address, m_fw_blocks[i].size, m_fw_read, m_fw_write))) {
@@ -3420,6 +3409,154 @@ namespace ams::dmnt {
             }
         }
         m_fw_active = true;
+        g_gen2_fast_tick = m_fw_sweep;
+    }
+
+    /* The watchpoints for every qword of the instance that still has a byte
+     * never accessed: at most four, each a power-of-two size at an address
+     * aligned to it, so they take in some of what lies between and around.
+     * A byte already marked has nothing more to tell, and it is the fields
+     * the game uses all the time that get marked first: leaving them out is
+     * what lets the game run at speed again. */
+    u32 GdbServerImpl::FieldWatchBuildCover(FieldWatchBlock *out) const {
+        if (m_fw_sweep) {
+            return this->FieldWatchBuildSweep(out);
+        }
+        const u8 *bits = reinterpret_cast<const u8 *>(std::addressof(m_watch_data.fromU));
+        auto enclosing = [](u64 lo, u64 hi) -> FieldWatchBlock {
+            u64 size = 8;
+            while (util::AlignDown(lo, size) + size < hi) {
+                size <<= 1;
+            }
+            return { util::AlignDown(lo, size), size };
+        };
+
+        /* Aligned power-of-two blocks nest or are apart, never overlap: the
+         * list stays sorted and disjoint through every merge. */
+        FieldWatchBlock list[util::size(m_fw_blocks) + 1];
+        u32 count = 0;
+        for (u64 qword = util::AlignDown(m_fw_lo, 8); qword < m_fw_hi; qword += 8) {
+            bool unseen = false;
+            for (u64 a = std::max(qword, m_fw_lo); a < std::min(qword + 8, m_fw_hi) && !unseen; a++) {
+                unseen = (bits[(a - m_fw_lo) >> 3] & (1u << ((a - m_fw_lo) & 7))) == 0;
+            }
+            if (!unseen) {
+                continue;
+            }
+            list[count++] = { qword, 8 };
+
+            /* Two halves of one block cost nothing to join. */
+            while (count >= 2) {
+                const FieldWatchBlock &a = list[count - 2], &b = list[count - 1];
+                const FieldWatchBlock whole = enclosing(a.address, b.address + b.size);
+                if (a.address + a.size != b.address || whole.size != a.size + b.size) {
+                    break;
+                }
+                list[count - 2] = whole;
+                count--;
+            }
+
+            /* One too many: join the neighbours that need the smallest block. */
+            if (count > util::size(m_fw_blocks)) {
+                u32 best = 0;
+                FieldWatchBlock merged = enclosing(list[0].address, list[1].address + list[1].size);
+                for (u32 i = 1; i + 1 < count; i++) {
+                    const FieldWatchBlock candidate = enclosing(list[i].address, list[i + 1].address + list[i + 1].size);
+                    if (candidate.size < merged.size) {
+                        merged = candidate;
+                        best   = i;
+                    }
+                }
+                u32 kept = 0;
+                for (u32 i = 0; i < count; i++) {
+                    if (i == best) {
+                        list[kept++] = merged;
+                    } else if (!(merged.address <= list[i].address && list[i].address + list[i].size <= merged.address + merged.size)) {
+                        list[kept++] = list[i];
+                    }
+                }
+                count = kept;
+            }
+        }
+        for (u32 i = 0; i < count; i++) {
+            out[i] = list[i];
+        }
+        return count;
+    }
+
+    /* The sweep's watchpoints: what is still unseen cut into exact pieces - each
+     * run of wholly unseen qwords into the aligned power-of-two blocks that tile
+     * it, a part-seen qword down to the bytes from its first unseen one to its last -
+     * and four of the pieces, from m_fw_sweep_cursor on. Nothing seen is
+     * watched, so nothing stops the game until an unseen byte is accessed. */
+    u32 GdbServerImpl::FieldWatchBuildSweep(FieldWatchBlock *out) const {
+        const u8 *bits = reinterpret_cast<const u8 *>(std::addressof(m_watch_data.fromU));
+        auto seen = [&](u64 a) {
+            return a < m_fw_lo || a >= m_fw_hi || (bits[(a - m_fw_lo) >> 3] & (1u << ((a - m_fw_lo) & 7))) != 0;
+        };
+        /* How many of a qword's eight bytes are still unseen. */
+        auto unseen_in = [&](u64 qword) {
+            u32 count = 0;
+            for (u64 a = qword; a < qword + 8; a++) {
+                count += seen(a) ? 0 : 1;
+            }
+            return count;
+        };
+        /* Calls piece(block) for each, in address order. Only qwords with all
+         * eight bytes unseen join into larger blocks: one with a seen byte in
+         * it would bring that byte's accesses back, and those are the frequent
+         * ones. It is watched by itself, from its first unseen byte to its last. */
+        auto for_each_piece = [&](auto piece) {
+            const u64 end = util::AlignUp(m_fw_hi, 8);
+            u64 qword = util::AlignDown(m_fw_lo, 8);
+            while (qword < end) {
+                const u32 unseen = unseen_in(qword);
+                if (unseen == 0) {
+                    qword += 8;
+                    continue;
+                }
+                if (unseen < 8) {
+                    u64 first = qword, last = qword + 7;
+                    while (seen(first)) { first++; }
+                    while (seen(last)) { last--; }
+                    piece(FieldWatchBlock{ first, last - first + 1 });
+                    qword += 8;
+                    continue;
+                }
+                u64 run_end = qword + 8;
+                while (run_end < end && unseen_in(run_end) == 8) {
+                    run_end += 8;
+                }
+                while (qword < run_end) {
+                    u64 size = 8;
+                    while (util::IsAligned(qword, size * 2) && qword + size * 2 <= run_end) {
+                        size *= 2;
+                    }
+                    piece(FieldWatchBlock{ qword, size });
+                    qword += size;
+                }
+            }
+        };
+
+        u32 total = 0;
+        for_each_piece([&](const FieldWatchBlock &) { total++; });
+        if (total == 0) {
+            return 0;
+        }
+        const u32 count = std::min<u32>(total, util::size(m_fw_blocks));
+        const u32 start = m_fw_sweep_cursor % total;
+        u32 index = 0, taken = 0;
+        FieldWatchBlock picked[util::size(m_fw_blocks)];
+        for_each_piece([&](const FieldWatchBlock &block) {
+            if ((index + total - start) % total < count) {
+                picked[taken++] = block;
+            }
+            index++;
+        });
+        for (u32 i = 0; i < taken; i++) {
+            out[i] = picked[i];
+        }
+        return taken;
     }
 
     /* Leaves m_watch_data alone: the bitmap is the result, and the client reads
@@ -3441,6 +3578,7 @@ namespace ams::dmnt {
             }
         }
         m_fw_active      = false;
+        g_gen2_fast_tick = false;
         m_fw_block_count = 0;
         m_fw_lifted      = 0;
         m_fw_step_pc     = 0;
@@ -3483,6 +3621,29 @@ namespace ams::dmnt {
             static_cast<void>(m_debug_process.ClearHardwareBreakPoint(m_fw_step_pc, sizeof(u32)));
             m_fw_step_pc = 0;
         }
+        /* Bytes were marked for the first time since the cover was built: it
+         * may be able to leave them out now. */
+        if (m_fw_dirty) {
+            m_fw_dirty = false;
+            FieldWatchBlock cover[util::size(m_fw_blocks)];
+            const u32 count = this->FieldWatchBuildCover(cover);
+            bool same = count == m_fw_block_count;
+            for (u32 i = 0; same && i < count; i++) {
+                same = cover[i].address == m_fw_blocks[i].address && cover[i].size == m_fw_blocks[i].size;
+            }
+            if (!same) {
+                for (u32 i = 0; i < m_fw_block_count; i++) {
+                    if ((m_fw_lifted & (1u << i)) == 0) {
+                        static_cast<void>(m_debug_process.ClearWatchPoint(m_fw_blocks[i].address, m_fw_blocks[i].size));
+                    }
+                }
+                m_fw_block_count = count;
+                for (u32 i = 0; i < count; i++) {
+                    m_fw_blocks[i] = cover[i];
+                }
+                m_fw_lifted = static_cast<u8>((1u << count) - 1);
+            }
+        }
         for (u32 i = 0; i < m_fw_block_count; i++) {
             if (m_fw_lifted & (1u << i)) {
                 if (R_FAILED(m_debug_process.SetWatchPoint(m_fw_blocks[i].address, m_fw_blocks[i].size, m_fw_read, m_fw_write))) {
@@ -3498,7 +3659,17 @@ namespace ams::dmnt {
      * branched away) would leave a block unwatched for good, and a step whose
      * thread never arrived would leave the game held. */
     void GdbServerImpl::FieldWatchTick() {
-        if (!m_fw_active || m_fw_state == FieldWatchState::None) {
+        if (!m_fw_active) {
+            return;
+        }
+        if (m_fw_state == FieldWatchState::None) {
+            /* Nothing in flight: a sweep moves on to the next four pieces. */
+            if (m_fw_sweep && os::ConvertToTimeSpan(os::GetSystemTick() - m_fw_sweep_start) >= TimeSpan::FromMilliSeconds(100)) {
+                m_fw_sweep_start   = os::GetSystemTick();
+                m_fw_sweep_cursor += util::size(m_fw_blocks);
+                m_fw_dirty         = true;
+                this->FieldWatchRearm();
+            }
             return;
         }
         const auto elapsed = os::ConvertToTimeSpan(os::GetSystemTick() - m_fw_state_start);
@@ -3542,10 +3713,33 @@ namespace ams::dmnt {
             if (width == 64) {
                 begin = util::AlignDown(address, 64);
             }
-            const u64 end = std::min(begin + width, m_fw_hi);
+            u64 end = std::min(begin + width, m_fw_hi);
+            begin   = std::max(begin, m_fw_lo);
+            if (m_fw_sweep) {
+                /* A sweep's blocks are exact, and the reported address of an
+                 * access that starts before one may be anywhere from its start
+                 * to the block: only what lies in the block that fired is known
+                 * to have been accessed. That is the block holding the address,
+                 * or the first one above it. */
+                const FieldWatchBlock *fired = nullptr;
+                for (u32 i = 0; i < m_fw_block_count; i++) {
+                    const FieldWatchBlock &block = m_fw_blocks[i];
+                    if (address < block.address + block.size && (fired == nullptr || block.address < fired->address)) {
+                        fired = std::addressof(block);
+                    }
+                }
+                if (fired != nullptr) {
+                    begin = std::max(begin, fired->address);
+                    end   = std::min(std::max(end, fired->address + 1), fired->address + fired->size);
+                }
+            }
             u8 *bits = reinterpret_cast<u8 *>(std::addressof(m_watch_data.fromU));
-            for (u64 a = std::max(begin, m_fw_lo); a < end; a++) {
-                bits[(a - m_fw_lo) >> 3] |= static_cast<u8>(1u << ((a - m_fw_lo) & 7));
+            for (u64 a = begin; a < end; a++) {
+                const u8 bit = static_cast<u8>(1u << ((a - m_fw_lo) & 7));
+                if ((bits[(a - m_fw_lo) >> 3] & bit) == 0) {
+                    bits[(a - m_fw_lo) >> 3] |= bit;
+                    m_fw_dirty = true;
+                }
             }
         }
 
@@ -3633,7 +3827,7 @@ namespace ams::dmnt {
             AppendReplyFormat(reply_cur, reply_end, "Unable to set watch, no debug process attached\n");
             return;
         }
-        if (m_watch_data.x30_catch_type == FIELD_WATCH) {
+        if (m_watch_data.x30_catch_type == FIELD_WATCH || m_watch_data.x30_catch_type == FIELD_SWEEP) {
             this->FieldWatchSet();
             return;
         }

@@ -22,6 +22,7 @@
 namespace ams::dmnt {
     /* See dmnt2_gdb_server_impl.cpp for definitions. */
     extern os::Event g_gen2_request_event;
+    extern std::atomic<bool> g_gen2_fast_tick;
     extern u8        g_gen2_server_on;
 // bool gen2_loop(u32 count);
     namespace {
@@ -48,6 +49,7 @@ namespace ams::dmnt {
          * client is poking us. See design doc Opt 1.
          */
         constexpr inline TimeSpan Gen2LoopRefreshInterval = TimeSpan::FromMilliSeconds(500);
+        constexpr inline TimeSpan Gen2LoopSweepInterval = TimeSpan::FromMilliSeconds(100);
 
         void GdbServerThreadFunction2(void *) {
             while (true) {
@@ -56,7 +58,8 @@ namespace ams::dmnt {
                  * gen2loop_on mirror fields current. Auto-clear event,
                  * so multiple signals between two ticks collapse to one
                  * iteration. */
-                g_gen2_request_event.TimedWait(Gen2LoopRefreshInterval);
+                /* A field sweep moves its watchpoints on from this loop. */
+                g_gen2_request_event.TimedWait(g_gen2_fast_tick.load() ? Gen2LoopSweepInterval : Gen2LoopRefreshInterval);
                 {
                     std::scoped_lock lk(g_gdb_server_lock);
                     if (g_gdb_server_constructed.load(std::memory_order_acquire)) {
