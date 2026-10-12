@@ -100,6 +100,10 @@ namespace ams::dmnt {
             u32 m_mw_count{0};
             u64 m_mw_main{0};
             bool m_mw_active{false};
+            u64 m_mw_pid{0};
+            u64 m_cw_pid{0};
+            void WatchTablesAfterAttach();
+            void DetachWithWatchBreaksOff();
             void MethodWatchSet();
             void MethodWatchClear();
             void MethodWatchSync();

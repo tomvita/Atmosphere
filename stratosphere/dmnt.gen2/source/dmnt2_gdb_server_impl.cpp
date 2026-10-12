@@ -263,11 +263,7 @@ namespace ams::dmnt {
                         m_fw_active = false;
                         m_fw_state = FieldWatchState::None;
                         m_fw_step_pc = 0;
-                        /* Another process: nothing of the table is in it. */
-                        m_mw_active = false;
-                        m_mw_count = 0;
-                        m_cw_active = false;
-                        this->CodeWatchClose();
+                        this->WatchTablesAfterAttach();
                     }
                     {
                         std::scoped_lock lk(g_watch_data_lock);
@@ -288,11 +284,7 @@ namespace ams::dmnt {
                         m_fw_active = false;
                         m_fw_state = FieldWatchState::None;
                         m_fw_step_pc = 0;
-                        /* Another process: nothing of the table is in it. */
-                        m_mw_active = false;
-                        m_mw_count = 0;
-                        m_cw_active = false;
-                        this->CodeWatchClose();
+                        this->WatchTablesAfterAttach();
                     }
                     {
                         std::scoped_lock lk(g_watch_data_lock);
@@ -1520,8 +1512,22 @@ namespace ams::dmnt {
         /* Clear our state. */
         m_state = State::Destroyed;
 
-        /* Detach. */
+        /* Detach. This object goes whenever the listening socket does - the
+         * console going to sleep is enough - and a method or code watch may
+         * be armed: its breaks are in the game's code, and with this object
+         * goes the only record of what was under them. Take them off first,
+         * as a detach asked for by the client does. */
         if (this->HasDebugProcess()) {
+            std::scoped_lock lk(g_watch_data_lock);
+            if (m_mw_active) {
+                this->MethodWatchClear();
+            }
+            if (m_cw_active) {
+                this->CodeWatchDisarm();
+            }
+            this->CodeWatchClose();
+            m_watch_data.address  = 0;
+            m_watch_data.attached = false;
             m_debug_process.Detach();
         }
 
@@ -1569,7 +1575,7 @@ namespace ams::dmnt {
                 g_attach_request_pending = false;
 
                 /* Detach. */
-                m_debug_process.Detach();
+                this->DetachWithWatchBreaksOff();
 
                 /* Check if we need to start the process. */
                 const bool start_process = m_process_id == m_wait_process_id;
@@ -1644,9 +1650,11 @@ namespace ams::dmnt {
                     g_event_lock.Lock();
                 }
 
-                /* Clear our process id and detach. */
+                /* Detach, then clear our process id. This is the way out when
+                 * the object is being destroyed (m_killed): the destructor
+                 * finds no debug process left by the time it looks. */
+                this->DetachWithWatchBreaksOff();
                 m_process_id = os::InvalidProcessId;
-                m_debug_process.Detach();
             }
         }
 
@@ -2720,7 +2728,7 @@ namespace ams::dmnt {
     }
 
     void GdbServerImpl::D() { // Detach
-        m_debug_process.Detach();
+        this->DetachWithWatchBreaksOff();
         AppendReplyOk(m_reply_cur, m_reply_end);
     }
 
@@ -3878,12 +3886,57 @@ namespace ams::dmnt {
         }
     }
 
+    /* A fresh attach while a method or code watch is still held here: that
+     * watch was cut off. Its debugger went away without a detach from us (the
+     * console slept, or something else took the game), and its breaks are
+     * still in the game's code, where the first call would crash the game.
+     * The same process again: take them off, which is all a detach would have
+     * done. Another process: nothing of the table is in it. */
+    /* Every detach that does not come through clearw(): the events thread
+     * on its way out (which is how the object's destruction detaches - the
+     * console going to sleep is enough to destroy it), a new attach request,
+     * a GDB client's detach. A method or code watch may be armed, its breaks
+     * in the game's code, and after the detach nothing can take them off. */
+    void GdbServerImpl::DetachWithWatchBreaksOff() {
+        {
+            std::scoped_lock lk(g_watch_data_lock);
+            if (m_debug_process.IsValid()) {
+                if (m_mw_active) {
+                    this->MethodWatchClear();
+                    m_watch_data.address = 0;
+                }
+                if (m_cw_active) {
+                    this->CodeWatchDisarm();
+                    m_watch_data.address = 0;
+                }
+                this->CodeWatchClose();
+            }
+        }
+        m_debug_process.Detach();
+    }
+
+    void GdbServerImpl::WatchTablesAfterAttach() {
+        std::scoped_lock lk(g_watch_data_lock);
+        const bool same = m_debug_process.IsValid();
+        if (same && m_mw_active && m_mw_pid == m_process_id.value) {
+            this->MethodWatchClear();
+        }
+        m_mw_active = false;
+        m_mw_count  = 0;
+        if (same && m_cw_active && m_cw_pid == m_process_id.value) {
+            this->CodeWatchDisarm();
+        }
+        m_cw_active = false;
+        this->CodeWatchClose();
+    }
+
     void GdbServerImpl::MethodWatchSet() {
         const m_method_t *in = reinterpret_cast<const m_method_t *>(std::addressof(m_watch_data.fromU));
         const u32 count = static_cast<u32>(std::clamp<int>(m_watch_data.size, 0, MethodWatchMax));
         m_watch_data.count = 0;
         m_mw_main  = m_watch_data.main_start;
         m_mw_count = count;
+        m_mw_pid   = m_process_id.value;
         for (u32 i = 0; i < count; i++) {
             MethodWatchEntry &e = m_mw[i];
             e.method = in[i].method;
@@ -4026,6 +4079,7 @@ namespace ams::dmnt {
         m_cw_ring_count = 0;
         m_cw_hits       = 0;
         m_cw_main       = m_watch_data.main_start;
+        m_cw_pid        = m_process_id.value;
         const u32 count = static_cast<u32>(std::min<u64>(m_watch_data.v1, max_code_watch));
         u32 not_set = 0;
         bool ok = count != 0 && R_SUCCEEDED(fs::OpenFile(std::addressof(m_cw_file), CODE_WATCH_LIST, fs::OpenMode_Read | fs::OpenMode_Write));
@@ -4403,7 +4457,7 @@ namespace ams::dmnt {
                 cur_addr = next_address;
             }
         } else if (ParsePrefix(command, "detach")) {
-            m_debug_process.Detach();
+            this->DetachWithWatchBreaksOff();
 #if !defined(DMNT_GEN2_NO_CHEATVM)
             dmnt::cheat::impl::SuspendDebugEvents(false);
 #endif
