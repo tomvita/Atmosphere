@@ -223,6 +223,7 @@ namespace ams::dmnt {
                 case DETACH: {
                     std::scoped_lock lk(g_watch_data_lock);
                     clearw();
+                    this->CodeWatchClose();
 
                     m_step_pending = false;
                     m_watchpoint_rearm_pending = false;
@@ -265,6 +266,8 @@ namespace ams::dmnt {
                         /* Another process: nothing of the table is in it. */
                         m_mw_active = false;
                         m_mw_count = 0;
+                        m_cw_active = false;
+                        this->CodeWatchClose();
                     }
                     {
                         std::scoped_lock lk(g_watch_data_lock);
@@ -288,6 +291,8 @@ namespace ams::dmnt {
                         /* Another process: nothing of the table is in it. */
                         m_mw_active = false;
                         m_mw_count = 0;
+                        m_cw_active = false;
+                        this->CodeWatchClose();
                     }
                     {
                         std::scoped_lock lk(g_watch_data_lock);
@@ -2365,6 +2370,17 @@ namespace ams::dmnt {
                                 {
                                     signal            = GdbSignal_IllegalInstruction;
 
+                                    /* A code watch's break: the same, out of the long list. */
+                                    if (m_cw_count != 0) {
+                                        std::unique_lock cw_lk(g_watch_data_lock);
+                                        if (this->CodeWatchOnBreak(thread_id, d.info.exception.address)) {
+                                            cw_lk.unlock();
+                                            CheckRateLimitAndSleep();
+                                            m_debug_process.Continue();
+                                            break;
+                                        }
+                                    }
+
                                     /* A method watch's break: the instruction is back, run on. */
                                     if (m_mw_count != 0) {
                                         std::unique_lock mw_lk(g_watch_data_lock);
@@ -3950,6 +3966,223 @@ namespace ams::dmnt {
         return false;
     }
 
+    void GdbServerImpl::CodeWatchClose() {
+        if (m_cw_file_open) {
+            fs::CloseFile(m_cw_file);
+            m_cw_file_open = false;
+        }
+        m_cw_count    = 0;
+        m_cw_chunk_at = 0xFFFFFFFF;
+    }
+
+    bool GdbServerImpl::CodeWatchChunkLoad(u32 chunk) {
+        if (m_cw_chunk_at == chunk) {
+            return true;
+        }
+        m_cw_chunk_at = 0xFFFFFFFF;
+        const u32 count = std::min<u32>(CodeWatchChunk, m_cw_count - chunk * CodeWatchChunk);
+        if (!m_cw_file_open || R_FAILED(fs::ReadFile(m_cw_file, static_cast<s64>(chunk) * sizeof(m_cw_chunk), m_cw_chunk, count * sizeof(m_code_entry_t)))) {
+            return false;
+        }
+        m_cw_chunk_at = chunk;
+        return true;
+    }
+
+    /* The hits kept here go to the end of the file. The client reads that
+     * file, and while it has it open ours fails: wait for it, the game with us. */
+    void GdbServerImpl::CodeWatchSpill() {
+        if (m_cw_ring_count == 0) {
+            return;
+        }
+        bool written = false;
+        for (int attempt = 0; attempt < 400 && !written; attempt++) {
+            fs::FileHandle file;
+            if (R_SUCCEEDED(fs::OpenFile(std::addressof(file), CODE_WATCH_HITS, fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
+                s64 size = 0;
+                written = R_SUCCEEDED(fs::GetFileSize(std::addressof(size), file)) &&
+                          R_SUCCEEDED(fs::WriteFile(file, size, m_cw_ring, m_cw_ring_count * sizeof(m_code_hit_t), fs::WriteOption::Flush));
+                fs::CloseFile(file);
+                if (!written) {
+                    break;
+                }
+            } else {
+                os::SleepThread(TimeSpan::FromMilliSeconds(5));
+            }
+        }
+        if (!written) {
+            m_watch_data.failed = 7;
+        }
+        m_cw_ring_count = 0;
+        if (m_watch_data.x30_catch_type == CODE_WATCH) {
+            m_watch_data.count = 0;
+        }
+    }
+
+    void GdbServerImpl::CodeWatchArm() {
+        static_assert(sizeof(m_cw_ring) == sizeof(m_watch_data.fromU));
+        this->CodeWatchClose();
+        m_watch_data.count         = 0;
+        m_watch_data.total_trigger = 0;
+        m_cw_ring_count = 0;
+        m_cw_hits       = 0;
+        m_cw_main       = m_watch_data.main_start;
+        const u32 count = static_cast<u32>(std::min<u64>(m_watch_data.v1, max_code_watch));
+        u32 not_set = 0;
+        bool ok = count != 0 && R_SUCCEEDED(fs::OpenFile(std::addressof(m_cw_file), CODE_WATCH_LIST, fs::OpenMode_Read | fs::OpenMode_Write));
+        m_cw_file_open = ok;
+        m_cw_count     = ok ? count : 0;
+        u32 last = 0;
+        for (u32 chunk = 0; ok && chunk * CodeWatchChunk < count; chunk++) {
+            const u32 n = std::min<u32>(CodeWatchChunk, count - chunk * CodeWatchChunk);
+            const s64 at = static_cast<s64>(chunk) * sizeof(m_cw_chunk);
+            ok = R_SUCCEEDED(fs::ReadFile(m_cw_file, at, m_cw_chunk, n * sizeof(m_code_entry_t)));
+            for (u32 i = 0; ok && i < n; i++) {
+                m_code_entry_t &e = m_cw_chunk[i];
+                /* The search needs them in order, and a function listed twice
+                 * would get the break as its own original instruction. */
+                if ((chunk != 0 || i != 0) && e.method <= last) {
+                    ok = false;
+                    break;
+                }
+                last = e.method;
+                const u64 address = m_cw_main + e.method;
+                u32 original = 0;
+                if (R_SUCCEEDED(m_debug_process.ReadMemory(std::addressof(original), address, sizeof(u32))) && original != MethodWatchBreak &&
+                    R_SUCCEEDED(m_debug_process.WriteMemory(std::addressof(MethodWatchBreak), address, sizeof(u32)))) {
+                    e.original = original;
+                } else {
+                    /* One already there is somebody else's breakpoint: not ours to take off. */
+                    e.original = MethodWatchBreak;
+                    not_set++;
+                }
+            }
+            m_cw_index[chunk] = m_cw_chunk[0].method;
+            /* Written even when the chunk went wrong part way: the breaks
+             * put on so far have to come off, and that is read from here. */
+            if (R_FAILED(fs::WriteFile(m_cw_file, at, m_cw_chunk, n * sizeof(m_code_entry_t), fs::WriteOption::None))) {
+                ok = false;
+            }
+            m_cw_chunk_at = chunk;
+        }
+        if (m_cw_file_open) {
+            static_cast<void>(fs::FlushFile(m_cw_file));
+        }
+        m_cw_active = m_cw_file_open;
+        if (!ok) {
+            /* Whatever was armed comes off again. Functions past the point of
+             * failure hold original 0, which is never the break: left alone. */
+            this->CodeWatchDisarm();
+            this->CodeWatchClose();
+            m_watch_data.failed  = 6;
+            m_watch_data.address = 0;
+        }
+        m_watch_data.v1 = m_cw_count;
+        m_watch_data.v2 = not_set;
+    }
+
+    /* Takes the break off every function not called, and writes out the hits. */
+    void GdbServerImpl::CodeWatchDisarm() {
+        if (m_cw_active && m_cw_file_open && m_debug_process.IsValid()) {
+            for (u32 chunk = 0; chunk * CodeWatchChunk < m_cw_count; chunk++) {
+                if (!this->CodeWatchChunkLoad(chunk)) {
+                    m_watch_data.failed = 6;
+                    continue;
+                }
+                const u32 n = std::min<u32>(CodeWatchChunk, m_cw_count - chunk * CodeWatchChunk);
+                for (u32 i = 0; i < n; i++) {
+                    const m_code_entry_t &e = m_cw_chunk[i];
+                    if (e.original == MethodWatchBreak || e.original == 0) {
+                        continue;
+                    }
+                    const u64 address = m_cw_main + e.method;
+                    u32 now = 0;
+                    if (R_SUCCEEDED(m_debug_process.ReadMemory(std::addressof(now), address, sizeof(u32))) && now == MethodWatchBreak) {
+                        static_cast<void>(m_debug_process.WriteMemory(std::addressof(e.original), address, sizeof(u32)));
+                    }
+                }
+            }
+        }
+        if (m_cw_active) {
+            this->CodeWatchSpill();
+        }
+        m_cw_active = false;
+    }
+
+    bool GdbServerImpl::CodeWatchOnBreak(u64 thread_id, u64 address) {
+        if (m_cw_count == 0 || address < m_cw_main || address - m_cw_main > 0xFFFFFFFFul) {
+            return false;
+        }
+        const u32 method = static_cast<u32>(address - m_cw_main);
+        /* The last chunk that starts at or below it. */
+        const u32 chunks = (m_cw_count + CodeWatchChunk - 1) / CodeWatchChunk;
+        u32 lo = 0, hi = chunks;
+        while (hi - lo > 1) {
+            const u32 mid = lo + (hi - lo) / 2;
+            if (m_cw_index[mid] <= method) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        if (m_cw_index[lo] > method || !this->CodeWatchChunkLoad(lo)) {
+            return false;
+        }
+        const u32 n = std::min<u32>(CodeWatchChunk, m_cw_count - lo * CodeWatchChunk);
+        u32 a = 0, b = n;
+        while (a < b) {
+            const u32 mid = a + (b - a) / 2;
+            if (m_cw_chunk[mid].method < method) {
+                a = mid + 1;
+            } else {
+                b = mid;
+            }
+        }
+        if (a >= n || m_cw_chunk[a].method != method) {
+            return false;
+        }
+        const u32 original = m_cw_chunk[a].original;
+        if (original == MethodWatchBreak || original == 0) {
+            return false;
+        }
+        /* The break still there: this is the first call. Gone: another thread's
+         * hit, or the end of the watch, put the instruction back while this one
+         * was on its way, and it runs the real instruction now. */
+        u32 now = 0;
+        if (R_FAILED(m_debug_process.ReadMemory(std::addressof(now), address, sizeof(u32)))) {
+            return false;
+        }
+        if (now != MethodWatchBreak) {
+            return true;
+        }
+        if (R_FAILED(m_debug_process.WriteMemory(std::addressof(original), address, sizeof(u32)))) {
+            m_watch_data.failed = 5;
+            return false;
+        }
+        if (!m_cw_active) {
+            return true;
+        }
+        if (m_cw_ring_count >= static_cast<u32>(max_code_ring)) {
+            this->CodeWatchSpill();
+        }
+        m_code_hit_t &hit = m_cw_ring[m_cw_ring_count];
+        hit.method = method;
+        hit.caller = 0;
+        svc::ThreadContext ctx;
+        if (R_SUCCEEDED(m_debug_process.GetThreadContext(std::addressof(ctx), thread_id, svc::ThreadContextFlag_Control))) {
+            if (ctx.lr >= m_cw_main && ctx.lr - m_cw_main < (1ul << 34)) {
+                hit.caller = static_cast<u32>((ctx.lr - m_cw_main) >> 2);
+            }
+        }
+        m_cw_ring_count++;
+        m_cw_hits++;
+        if (m_watch_data.x30_catch_type == CODE_WATCH) {
+            reinterpret_cast<m_code_hit_t *>(std::addressof(m_watch_data.fromU))[m_cw_ring_count - 1] = hit;
+            m_watch_data.count         = static_cast<int>(m_cw_ring_count);
+            m_watch_data.total_trigger = m_cw_hits;
+        }
+        return true;
+    }
+
     void GdbServerImpl::setw() {
         char *reply_cur = m_buffer;
         char *reply_end = m_buffer + sizeof(m_buffer);
@@ -3966,6 +4199,10 @@ namespace ams::dmnt {
         }
         if (m_watch_data.x30_catch_type == METHOD_WATCH) {
             this->MethodWatchSet();
+            return;
+        }
+        if (m_watch_data.x30_catch_type == CODE_WATCH) {
+            this->CodeWatchArm();
             return;
         }
         if ((m_watch_data.read || m_watch_data.write) && m_debug_process.IsValidWatchPoint(m_watch_data.address, m_watch_data.size)) {
@@ -4007,6 +4244,11 @@ namespace ams::dmnt {
         const bool has_debug_process = m_debug_process.IsValid();
         if (m_mw_active) {
             this->MethodWatchClear();
+            m_watch_data.address = 0;
+            return;
+        }
+        if (m_cw_active) {
+            this->CodeWatchDisarm();
             m_watch_data.address = 0;
             return;
         }

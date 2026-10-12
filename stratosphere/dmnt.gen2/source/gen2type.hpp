@@ -1,7 +1,7 @@
 #define max_watch_buffer 0x200
 #define max_call_stack 5
 #define stack_check_size 100
-#define GEN2_VERSION "v0.18"
+#define GEN2_VERSION "v0.19"
         typedef struct {
             u64 address:64;
             u32 count:32;
@@ -77,6 +77,10 @@
             // A break instruction goes on each method's first instruction and
             // comes off at its first hit, so a method stops the game once.
             METHOD_WATCH,
+            // v0.19: METHOD_WATCH for a whole module. The list is a file (see
+            // CODE_WATCH_LIST below), since neither this block nor the fork's
+            // memory holds a hundred thousand functions.
+            CODE_WATCH,
         } NX_PACKED;
         typedef struct {
             u32 method;       // the method's first instruction, as an offset from main_start
@@ -91,6 +95,27 @@
             METHOD_NOT_SET,      // the break could not be put there
         };
 #define max_method_watch ((int)(max_watch_buffer * sizeof(m_from_t) / sizeof(m_method_t)))
+        // CODE_WATCH. Before the SETW the client writes CODE_WATCH_LIST, `v1`
+        // records of m_code_entry_t ascending by method with original 0, and
+        // leaves CODE_WATCH_HITS empty. The fork fills in each original as it
+        // puts the break there. Each first call is an m_code_hit_t: the newest
+        // are in fromU (`count` of them), the ones before were appended to
+        // CODE_WATCH_HITS, and total_trigger counts both. CLEARW takes the
+        // breaks off and appends the rest, so the file is then the whole run.
+        // Out of the SETW: v1 = functions, v2 = those no break could be put on;
+        // failed = 6 the list could not be read, 7 the hits could not be written.
+        typedef struct {
+            u32 method;    // the function's first instruction, as an offset from main_start
+            u32 original;  // the instruction the break replaced; the break itself where none was put
+        } NX_PACKED m_code_entry_t;
+        typedef struct {
+            u32 method;
+            u32 caller;    // (return address - main_start) >> 2 at the first call, 0 outside main
+        } NX_PACKED m_code_hit_t;
+#define CODE_WATCH_LIST "sdmc:/switch/breeze/code_watch.bin"
+#define CODE_WATCH_HITS "sdmc:/switch/breeze/code_watch_hits.bin"
+#define max_code_watch 131072
+#define max_code_ring ((int)(max_watch_buffer * sizeof(m_from_t) / sizeof(m_code_hit_t)))
 // The largest instance a FIELD_WATCH bitmap holds, in bytes.
 #define field_watch_max_size (max_watch_buffer * sizeof(m_from_t) * 8)
         typedef struct {

@@ -104,6 +104,30 @@ namespace ams::dmnt {
             void MethodWatchClear();
             void MethodWatchSync();
             bool MethodWatchOnBreak(u64 thread_id, u64 address);
+            /* CODE_WATCH: the same one-shot breaks for a whole module. The
+             * list, with each original instruction, is a file on the SD card;
+             * kept here are the first function of every chunk of it, one chunk,
+             * and the newest hits. A hit reads its chunk unless it is the one
+             * already here. The file stays open until the detach, so a hit
+             * that was on its way when the breaks came off is still known. */
+            static constexpr u32 CodeWatchChunk = 256;
+            u32 m_cw_index[max_code_watch / CodeWatchChunk]{};
+            m_code_entry_t m_cw_chunk[CodeWatchChunk]{};
+            u32 m_cw_chunk_at{0xFFFFFFFF};
+            m_code_hit_t m_cw_ring[max_code_ring]{};
+            u32 m_cw_ring_count{0};
+            u32 m_cw_hits{0};
+            u32 m_cw_count{0};
+            u64 m_cw_main{0};
+            bool m_cw_active{false};
+            bool m_cw_file_open{false};
+            fs::FileHandle m_cw_file{};
+            void CodeWatchArm();
+            void CodeWatchDisarm();
+            void CodeWatchClose();
+            void CodeWatchSpill();
+            bool CodeWatchChunkLoad(u32 chunk);
+            bool CodeWatchOnBreak(u64 thread_id, u64 address);
             void FieldWatchClear();
             void FieldWatchLift(u64 address);
             void FieldWatchRearm();
