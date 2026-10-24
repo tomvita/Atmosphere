@@ -29,6 +29,30 @@ namespace ams::dmnt::cheat::impl {
      * Returns false on timeout. */
     bool WaitDebugEventsParked(TimeSpan timeout);
 
+    /* gen2 taking the next application launch (v0.21).
+     *
+     * pm keeps one hook on "an application was created", and the cheat
+     * engine's launch thread holds it for good. So a gen2 client that wants a
+     * game from its first instruction (Breeze's block, or GDB's
+     * `monitor wait application`) registers here instead. On the next launch
+     * the launch thread leaves the process created but not started and hands
+     * its pid to that client, which attaches and starts it itself. Nobody
+     * taking it within a few seconds gets it started the usual way, so a
+     * launch can never be left hanging. */
+    enum Gen2LaunchWaiter : u8 {
+        Gen2LaunchWaiter_None  = 0,
+        Gen2LaunchWaiter_Block = 1,
+        Gen2LaunchWaiter_Gdb   = 2,
+    };
+    /* False when another waiter already holds the next launch. */
+    bool SetGen2LaunchWait(Gen2LaunchWaiter waiter);
+    /* Stops waiting, only if `waiter` is the one waiting. */
+    void CancelGen2LaunchWait(Gen2LaunchWaiter waiter);
+    Gen2LaunchWaiter GetGen2LaunchWait();
+    /* The created, not yet started process handed to `waiter`, or 0. Taking
+     * it makes starting it the taker's job. */
+    u64 TakeGen2LaunchedProcess(Gen2LaunchWaiter waiter);
+
     bool GetHasActiveCheatProcess();
     os::NativeHandle GetCheatProcessEventHandle();
     Result GetCheatProcessMetadata(CheatProcessMetadata *out);

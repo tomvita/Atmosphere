@@ -76,6 +76,11 @@ namespace ams::dmnt {
         enum class Gen2Pause : u8 { None, Requested, Paused, ResumeRequested };
         constinit Gen2Pause g_gen2_pause = Gen2Pause::None;
 
+        /* v0.21 WAIT_LAUNCH: the game gen2 attached to before its first
+         * instruction and still holds there, 0 when none. A global, not a
+         * member: sleep rebuilds GdbServerImpl. */
+        constinit u64 g_launch_held_pid = 0;
+
         static void ForgetWatchAfterAttach() {
             std::scoped_lock lk(g_watch_data_lock);
             m_watch_data.address = 0;
@@ -102,6 +107,9 @@ namespace ams::dmnt {
         }
 // #include "led.hpp"
         bool GdbServerImpl::gen2_loop() {
+            /* A game launched while the block waited for one (WAIT_LAUNCH). */
+            this->TakeLaunchedProcess();
+
             /* Note: we acquire+release the watch_data lock around each
              * field group so that long-blocking operations (Gen2Attach
              * waits on a 2s condvar timeout, Detach calls into the
@@ -110,6 +118,7 @@ namespace ams::dmnt {
             {
                 std::scoped_lock lk(g_watch_data_lock);
                 m_watch_data.attached = this->HasDebugProcess();
+                this->UpdateLaunchState();
                 /* gen2loop_on:
                  *   1 = a GDB session is alive
                  *   2 = raw mode (no GDB session, but accept thread is waiting)
@@ -222,6 +231,7 @@ namespace ams::dmnt {
                 }
                 case DETACH: {
                     std::scoped_lock lk(g_watch_data_lock);
+                    g_launch_held_pid = 0;
                     clearw();
                     this->CodeWatchClose();
 
@@ -253,6 +263,7 @@ namespace ams::dmnt {
                     {
                         std::scoped_lock lk(g_watch_data_lock);
                         if (this->HasDebugProcess() && m_process_id != os::ProcessId{m_watch_data.next_pid}) {
+                            g_launch_held_pid = 0;
                             clearw();
                             m_debug_process.Detach();
                         }
@@ -274,6 +285,7 @@ namespace ams::dmnt {
                     {
                         std::scoped_lock lk(g_watch_data_lock);
                         if (this->HasDebugProcess() && m_process_id != os::ProcessId{m_watch_data.next_pid}) {
+                            g_launch_held_pid = 0;
                             clearw();
                             m_debug_process.Detach();
                         }
@@ -289,12 +301,16 @@ namespace ams::dmnt {
                     {
                         std::scoped_lock lk(g_watch_data_lock);
                         m_watch_data.attach_success = m_debug_process.IsValid() && m_process_id == os::ProcessId{m_watch_data.next_pid};
-                        if (m_watch_data.attach_success) {
+                        /* A game held at launch stays held: clients send this on
+                         * the way into most of their screens, and the hold is
+                         * the reason the game was launched through gen2. */
+                        if (m_watch_data.attach_success && g_launch_held_pid != m_process_id.value) {
                             m_debug_process.Continue();
                         }
                     }
                     break;
                 case CONT:
+                    g_launch_held_pid = 0;
                     if (this->HasDebugProcess()) {
                         u64 thread_id = m_watch_data.bp_thread_id;
                         if (thread_id == 0 || thread_id == static_cast<u64>(-1)) {
@@ -371,6 +387,7 @@ namespace ams::dmnt {
                 }
                 case STEP: {
                     std::scoped_lock lk(g_watch_data_lock);
+                    g_launch_held_pid = 0;
                     if (this->HasDebugProcess()) {
                         u64 thread_id = m_watch_data.bp_thread_id;
                         if (thread_id == 0 || thread_id == static_cast<u64>(-1)) {
@@ -408,6 +425,7 @@ namespace ams::dmnt {
                 }
                 case STEPOVER: {
                     std::scoped_lock lk(g_watch_data_lock);
+                    g_launch_held_pid = 0;
                     if (this->HasDebugProcess()) {
                         u64 thread_id = m_watch_data.bp_thread_id;
                         if (thread_id == 0 || thread_id == static_cast<u64>(-1)) {
@@ -470,6 +488,8 @@ namespace ams::dmnt {
                 }
                 case RESUME: {
                     std::scoped_lock lk(g_watch_data_lock);
+                    /* A game held at launch stays held: RESUME undoes a PAUSE (the
+                     * overlay sends it whenever it hides), and the hold is not one. */
                     if (g_gen2_pause == Gen2Pause::Requested) {
                         g_gen2_pause = Gen2Pause::ResumeRequested;
                     } else if (g_gen2_pause == Gen2Pause::Paused) {
@@ -478,6 +498,23 @@ namespace ams::dmnt {
                             m_debug_process.Continue();
                         }
                     }
+                    break;
+                }
+                case WAIT_LAUNCH: {
+                    std::scoped_lock lk(g_watch_data_lock);
+#if !defined(DMNT_GEN2_NO_CHEATVM)
+                    if (m_watch_data.v1 != 0) {
+                        /* 8: GDB's `monitor wait application` holds the next launch. */
+                        m_watch_data.failed = dmnt::cheat::impl::SetGen2LaunchWait(dmnt::cheat::impl::Gen2LaunchWaiter_Block) ? 0 : 8;
+                    } else {
+                        dmnt::cheat::impl::CancelGen2LaunchWait(dmnt::cheat::impl::Gen2LaunchWaiter_Block);
+                        m_watch_data.failed = 0;
+                    }
+#else
+                    /* 9: no cheat engine, so nothing to hand a launch over. */
+                    m_watch_data.failed = 9;
+#endif
+                    this->UpdateLaunchState();
                     break;
                 }
                 case GETTHREADS: {
@@ -543,6 +580,7 @@ namespace ams::dmnt {
                     m_watch_data.bp_hit = m_debug_process.GetStatus() == DebugProcess::ProcessStatus_DebugBreak &&
                                           !(m_step_pending && m_continue_after_step);
                 }
+                this->UpdateLaunchState();
                 m_watch_data.done = true;
                 return m_watch_data.gen2loop_on;
             }
@@ -1427,6 +1465,79 @@ namespace ams::dmnt {
         constinit bool g_attach_done = false;
 
     }
+    /* WAIT_LAUNCH, once the cheat engine has handed the launch over: attach
+     * to the created process and start it, which leaves it halted before its
+     * first instruction (DebugProcess::Start), main already mapped. */
+    void GdbServerImpl::TakeLaunchedProcess() {
+#if !defined(DMNT_GEN2_NO_CHEATVM)
+        const u64 pid = dmnt::cheat::impl::TakeGen2LaunchedProcess(dmnt::cheat::impl::Gen2LaunchWaiter_Block);
+        if (pid == 0) {
+            return;
+        }
+        AMS_DMNT2_GDB_LOG_DEBUG("WAIT_LAUNCH: attaching to %lx before it starts\n", pid);
+
+        {
+            std::scoped_lock lk(g_watch_data_lock);
+            if (this->HasDebugProcess()) {
+                clearw();
+                this->CodeWatchClose();
+                m_debug_process.Detach();
+            }
+            m_watch_data.next_pid = pid;
+            /* The game to hold, whether the attach below makes it in time or not. */
+            g_launch_held_pid = pid;
+        }
+
+        /* The attach starts the process because it is the one waited for. */
+        m_wait_process_id = os::ProcessId{pid};
+        Gen2Attach();
+        ForgetWatchAfterAttach();
+        m_fw_active = false;
+        m_fw_state = FieldWatchState::None;
+        m_fw_step_pc = 0;
+        this->WatchTablesAfterAttach();
+
+        std::scoped_lock lk(g_watch_data_lock);
+        const bool attached = m_debug_process.IsValid() && m_process_id == os::ProcessId{pid};
+        if (!attached) {
+            /* Never leave a launch unstarted. When the attach did start it,
+             * this fails and does nothing. */
+            m_wait_process_id = os::InvalidProcessId;
+            R_DISCARD(pm::dmnt::StartProcess(os::ProcessId{pid}));
+        } else if (m_debug_process.GetLastThreadId() == 0) {
+            /* Start() saw the threads, but nothing has picked one: the stop's
+             * registers are read from the last thread. */
+            s32 count = 0;
+            u64 thread_id = 0;
+            if (R_SUCCEEDED(m_debug_process.GetThreadList(std::addressof(count), std::addressof(thread_id), 1)) && count > 0) {
+                m_debug_process.SetLastThreadId(thread_id);
+            }
+        }
+        m_watch_data.attach_success = attached;
+        this->UpdateLaunchState();
+        AMS_DMNT2_GDB_LOG_DEBUG("WAIT_LAUNCH: %lx %s\n", pid, attached ? "held" : "not attached, started");
+#endif
+    }
+
+    /* m_watch_data.launch_state, from gen2's own state. g_watch_data_lock held. */
+    void GdbServerImpl::UpdateLaunchState() {
+        u8 state = LAUNCH_NONE;
+        if (g_launch_held_pid != 0 && this->HasDebugProcess() && m_process_id.value == g_launch_held_pid) {
+            if (m_debug_process.GetStatus() == DebugProcess::ProcessStatus_DebugBreak) {
+                state = LAUNCH_HELD;
+            } else {
+                /* Something let it run (a GDB client): the hold is over. */
+                g_launch_held_pid = 0;
+            }
+        }
+#if !defined(DMNT_GEN2_NO_CHEATVM)
+        if (state == LAUNCH_NONE && dmnt::cheat::impl::GetGen2LaunchWait() == dmnt::cheat::impl::Gen2LaunchWaiter_Block) {
+            state = LAUNCH_WAITING;
+        }
+#endif
+        m_watch_data.launch_state = state;
+    }
+
     void GdbServerImpl::Gen2Attach() {
 #if !defined(DMNT_GEN2_NO_CHEATVM)
         dmnt::cheat::impl::SuspendDebugEvents(true);
@@ -1529,6 +1640,13 @@ namespace ams::dmnt {
             m_watch_data.address  = 0;
             m_watch_data.attached = false;
             m_debug_process.Detach();
+        }
+
+        /* `monitor wait application` took a launch and nothing attached to
+         * it: nobody else will start it. Fails harmlessly once it runs. */
+        if (m_wait_process_id != os::InvalidProcessId) {
+            R_DISCARD(pm::dmnt::StartProcess(m_wait_process_id));
+            m_wait_process_id = os::InvalidProcessId;
         }
 
 #if !defined(DMNT_GEN2_NO_CHEATVM)
@@ -4661,21 +4779,47 @@ namespace ams::dmnt {
             AppendReplyFormat(reply_cur, reply_end, "0x%010lx - 0x%010lx %s %s %c%c%c%c [%d, %d]\n", mem_info.base_address, mem_info.base_address + mem_info.size - 1, perm, state, l, i, d, u, mem_info.ipc_count, mem_info.device_count);
         } else if (ParsePrefix(command, "wait application") || ParsePrefix(command, "wait app")) {
             /* Wait for an application process. */
+#if !defined(DMNT_GEN2_NO_CHEATVM)
+            /* pm has one application hook and the cheat engine's launch thread
+             * holds it, so asking pm for it here failed (and aborted dmnt). The
+             * launch thread hands the launch over instead, created and not
+             * started; the attach below starts it. */
+            if (!dmnt::cheat::impl::SetGen2LaunchWait(dmnt::cheat::impl::Gen2LaunchWaiter_Gdb)) {
+                AppendReplyFormat(reply_cur, reply_end, "Breeze is already waiting for the next game launch.\n");
+            } else {
+                u64 pid = 0;
+                while (!m_killed && (pid = dmnt::cheat::impl::TakeGen2LaunchedProcess(dmnt::cheat::impl::Gen2LaunchWaiter_Gdb)) == 0) {
+                    os::SleepThread(TimeSpan::FromMilliSeconds(10));
+                }
+                if (pid == 0) {
+                    dmnt::cheat::impl::CancelGen2LaunchWait(dmnt::cheat::impl::Gen2LaunchWaiter_Gdb);
+                    AppendReplyFormat(reply_cur, reply_end, "Stopped waiting.\n");
+                } else {
+                    m_wait_process_id = os::ProcessId{pid};
+                    AppendReplyFormat(reply_cur, reply_end, "Send `attach 0x%lx` to attach.\n", m_wait_process_id.value);
+                }
+            }
+#else
             {
                 /* Get hook to creation of application process. */
                 os::NativeHandle h;
-                R_ABORT_UNLESS(pm::dmnt::HookToCreateApplicationProcess(std::addressof(h)));
+                if (R_FAILED(pm::dmnt::HookToCreateApplicationProcess(std::addressof(h)))) {
+                    AppendReplyFormat(reply_cur, reply_end, "Something else holds pm's application launch hook.\n");
+                } else {
+                    /* Wait for event. */
+                    {
+                        os::SystemEvent hook_event(h, true, os::InvalidNativeHandle, false, os::EventClearMode_AutoClear);
+                        hook_event.Wait();
+                    }
 
-                /* Wait for event. */
-                os::SystemEvent hook_event(h, true, os::InvalidNativeHandle, false, os::EventClearMode_AutoClear);
-                hook_event.Wait();
+                    /* Get application process id. */
+                    R_ABORT_UNLESS(pm::dmnt::GetApplicationProcessId(std::addressof(m_wait_process_id)));
+
+                    /* Note that we're attaching. */
+                    AppendReplyFormat(reply_cur, reply_end, "Send `attach 0x%lx` to attach.\n", m_wait_process_id.value);
+                }
             }
-
-            /* Get application process id. */
-            R_ABORT_UNLESS(pm::dmnt::GetApplicationProcessId(std::addressof(m_wait_process_id)));
-
-            /* Note that we're attaching. */
-            AppendReplyFormat(reply_cur, reply_end, "Send `attach 0x%lx` to attach.\n", m_wait_process_id.value);
+#endif
         } else if (ParsePrefix(command, "wait ")) {
             /* Allow optional "0x" prefix. */
             ParsePrefix(command, "0x");

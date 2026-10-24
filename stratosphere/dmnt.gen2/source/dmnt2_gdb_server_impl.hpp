@@ -147,6 +147,8 @@ namespace ams::dmnt {
             bool gen2_loop();
             u8 gen2_server_on = 0;
             void Gen2Attach();
+            void TakeLaunchedProcess();
+            void UpdateLaunchState();
             m_from_stack_t get_from_stack(svc::ThreadContext &thread_context, bool get_address);
             bool BreakFilterMatches(svc::ThreadContext &thread_context);
             void set_next_watch_for_exclusive_search();

@@ -21,11 +21,39 @@
 #include "../../dmnt2_gdb_server.hpp"
 #include "../../dmnt2_shared_debug_handle.hpp"
 
+namespace ams::dmnt {
+    /* See dmnt2_gdb_server_impl.cpp: wakes gen2_loop. */
+    extern os::Event g_gen2_request_event;
+}
+
 namespace ams::dmnt::cheat::impl {
 
     namespace {
 
         std::atomic<bool> g_suspend_debug_events = false;
+
+        /* gen2 taking the next application launch: see dmnt_cheat_api.hpp.
+         * Who waits, and the process handed over (0 = none). The pid stays
+         * set until the waiter takes it, or the launch thread takes it back. */
+        std::atomic<u8>  g_gen2_launch_waiter = Gen2LaunchWaiter_None;
+        std::atomic<u8>  g_gen2_launched_owner = Gen2LaunchWaiter_None;
+        std::atomic<u64> g_gen2_launched_pid = 0;
+
+        /* How long a handed-over launch waits for its taker. gen2_loop is woken
+         * at once, so this is only for a gen2 that is gone or stuck (a GDB
+         * server being rebuilt after sleep). */
+        constexpr inline TimeSpan Gen2LaunchTakeTimeout = TimeSpan::FromSeconds(5);
+
+        /* Breeze asks just before it requests the launch, so a block wait older
+         * than this is for a launch that never came: it must not catch the next
+         * game started from HOME minutes later. GDB's wait has no limit. */
+        constexpr inline TimeSpan Gen2LaunchBlockWaitLimit = TimeSpan::FromSeconds(60);
+        std::atomic<s64> g_gen2_launch_wait_tick = 0;
+
+        bool Gen2LaunchWaitExpired(u8 waiter) {
+            return waiter == Gen2LaunchWaiter_Block &&
+                   os::ConvertToTimeSpan(os::Tick(os::GetSystemTick().GetInt64Value() - g_gen2_launch_wait_tick.load())) >= Gen2LaunchBlockWaitLimit;
+        }
 
         /* Acknowledgement for g_suspend_debug_events: true whenever
          * DebugEventsThread is definitely not inside WaitSynchronization /
@@ -750,6 +778,44 @@ namespace ams::dmnt::cheat::impl {
 
         };
 
+        /* The launch just signalled goes to a waiting gen2 client: it stays
+         * created and not started, and its pid is handed over. True when the
+         * client took it (starting it is the client's job then); false when
+         * nobody waits or nobody took it in time, and the caller starts it
+         * the usual way. */
+        bool HandLaunchToGen2() {
+            const u8 waiter = g_gen2_launch_waiter.exchange(Gen2LaunchWaiter_None);
+            if (waiter == Gen2LaunchWaiter_None || Gen2LaunchWaitExpired(waiter)) {
+                return false;
+            }
+
+            os::ProcessId process_id = os::InvalidProcessId;
+            if (R_FAILED(pm::dmnt::GetApplicationProcessId(std::addressof(process_id))) || process_id == os::InvalidProcessId) {
+                return false;
+            }
+
+            AMS_DMNT2_DEBUG_LOG("[dmnt2:cheat] launch of %lx handed to gen2 waiter %d\n", process_id.value, waiter);
+            g_gen2_launched_owner = waiter;
+            g_gen2_launched_pid = process_id.value;
+            ams::dmnt::g_gen2_request_event.Signal();
+
+            const auto start = os::GetSystemTick();
+            while (g_gen2_launched_pid.load() != 0) {
+                if (os::ConvertToTimeSpan(os::GetSystemTick() - start) >= Gen2LaunchTakeTimeout) {
+                    /* Take it back, unless it was taken just now. */
+                    u64 expected = process_id.value;
+                    if (g_gen2_launched_pid.compare_exchange_strong(expected, 0)) {
+                        AMS_DMNT2_DEBUG_LOG("[dmnt2:cheat] nobody took launch %lx, starting it\n", process_id.value);
+                        g_gen2_launched_owner = Gen2LaunchWaiter_None;
+                        return false;
+                    }
+                    break;
+                }
+                os::SleepThread(TimeSpan::FromMilliSeconds(10));
+            }
+            return true;
+        }
+
         void CheatProcessManager::DetectLaunchThread(void *_this) {
             CheatProcessManager *manager = reinterpret_cast<CheatProcessManager *>(_this);
             AMS_DMNT2_DEBUG_LOG("[dmnt2:cheat] DetectLaunchThread started.\n");
@@ -764,6 +830,10 @@ namespace ams::dmnt::cheat::impl {
                 AMS_DMNT2_DEBUG_LOG("[dmnt2:cheat] HookToCreateApplicationProcess successfully got handle: %d. Waiting for signal...\n", h);
                 eventLoadRemote(std::addressof(hook), h, true);
                 if (R_SUCCEEDED(eventWait(std::addressof(hook), std::numeric_limits<u64>::max()))) {
+                    if (HandLaunchToGen2()) {
+                        eventClose(std::addressof(hook));
+                        continue;
+                    }
                     AMS_DMNT2_DEBUG_LOG("[dmnt2:cheat] Received process launch signal, calling AttachToApplicationProcess(true)...\n");
                     Result rc = manager->AttachToApplicationProcess(true);
                     AMS_DMNT2_DEBUG_LOG("[dmnt2:cheat] AttachToApplicationProcess(true) completed, result: 0x%08x\n", rc.GetValue());
@@ -1331,6 +1401,39 @@ namespace ams::dmnt::cheat::impl {
             os::SleepThread(TimeSpan::FromMilliSeconds(2));
         }
         return true;
+    }
+
+    bool SetGen2LaunchWait(Gen2LaunchWaiter waiter) {
+        u8 expected = Gen2LaunchWaiter_None;
+        if (!g_gen2_launch_waiter.compare_exchange_strong(expected, waiter)) {
+            /* An expired block wait gives way. */
+            if (expected != waiter && !(Gen2LaunchWaitExpired(expected) && g_gen2_launch_waiter.compare_exchange_strong(expected, waiter))) {
+                return false;
+            }
+        }
+        g_gen2_launch_wait_tick = os::GetSystemTick().GetInt64Value();
+        return true;
+    }
+
+    void CancelGen2LaunchWait(Gen2LaunchWaiter waiter) {
+        u8 expected = waiter;
+        g_gen2_launch_waiter.compare_exchange_strong(expected, Gen2LaunchWaiter_None);
+    }
+
+    Gen2LaunchWaiter GetGen2LaunchWait() {
+        const u8 waiter = g_gen2_launch_waiter.load();
+        return Gen2LaunchWaitExpired(waiter) ? Gen2LaunchWaiter_None : static_cast<Gen2LaunchWaiter>(waiter);
+    }
+
+    u64 TakeGen2LaunchedProcess(Gen2LaunchWaiter waiter) {
+        if (g_gen2_launched_owner.load() != waiter) {
+            return 0;
+        }
+        const u64 pid = g_gen2_launched_pid.exchange(0);
+        if (pid != 0) {
+            g_gen2_launched_owner = Gen2LaunchWaiter_None;
+        }
+        return pid;
     }
 
     bool GetHasActiveCheatProcess() {

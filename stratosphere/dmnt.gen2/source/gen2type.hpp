@@ -1,7 +1,7 @@
 #define max_watch_buffer 0x200
 #define max_call_stack 5
 #define stack_check_size 100
-#define GEN2_VERSION "v0.20"
+#define GEN2_VERSION "v0.21"
         typedef struct {
             u64 address:64;
             u32 count:32;
@@ -54,7 +54,8 @@
             SETREGS,
             PAUSE,      // v0.16: stop the game (the overlay's "pauses game"), through gen2's own events
             RESUME,     // v0.16: let a game PAUSE stopped run again
-            GETTHREADS  // v0.16: fill the thread list below, and refresh bp_ctx for bp_thread_id
+            GETTHREADS,  // v0.16: fill the thread list below, and refresh bp_ctx for bp_thread_id
+            WAIT_LAUNCH  // v0.21: v1 != 0: hold the next game launched before its first instruction; v1 == 0: stop waiting
         };
 #define max_thread_list 32
         enum x30_catch_type_t {
@@ -190,7 +191,16 @@
                 u64 sp;
                 char name[32];
             } threads[max_thread_list]{};
+            // v0.21 WAIT_LAUNCH: gen2 fills this in on every tick (a client's copy
+            // is overwritten). LAUNCH_HELD: attached to a game that has not run an
+            // instruction yet; bp_hit is set and the registers are its first
+            // thread's. The first CONT, STEP, STEPOVER or DETACH ends it;
+            // ATTACH_CONT on that game does not let it run.
+            u8 launch_state = 0;
         } m_watch_data_t;
+#define LAUNCH_NONE 0
+#define LAUNCH_WAITING 1
+#define LAUNCH_HELD 2
 #define BP_FILTER_X30 1u
 #define BP_FILTER_STACK(slot) (2u << (slot))
 // Break only when register `Register` (0-30) holds `Register_match_value`: at a
